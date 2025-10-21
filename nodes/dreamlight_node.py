@@ -2,11 +2,14 @@ import torch
 import numpy as np
 from PIL import Image
 import os
+import sys
 import logging
 import torch.nn.functional as F
 from transformers import CLIPVisionModelWithProjection, CLIPImageProcessor
 from diffusers import FluxPipeline
-from ..utils.env_lighting import calculate_spherical_harmonics, generate_spherical_image
+# Add the parent directory to the path to allow importing utils
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils.env_lighting import calculate_spherical_harmonics, generate_spherical_image
 
 # Define NODE_CLASS_MAPPINGS early to ensure registration
 NODE_CLASS_MAPPINGS = {
