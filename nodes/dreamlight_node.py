@@ -1,14 +1,13 @@
 import torch
 import numpy as np
 from PIL import Image
-import folder_paths
-import comfy.utils
 import os
 import logging
-from huggingface_hub import hf_hub_download, snapshot_download
-from transformers import CLIPVisionModelWithProjection, CLIPImageProcessor
-from diffusers import FluxPipeline
-from .utils.env_lighting import calculate_spherical_harmonics, generate_spherical_image
+
+# Define NODE_CLASS_MAPPINGS early to ensure registration
+NODE_CLASS_MAPPINGS = {
+    "DreamLightNode": None  # Will be set after class definition
+}
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -16,6 +15,10 @@ logger = logging.getLogger(__name__)
 def validate_and_download_models():
     """Validate installation and download models if missing"""
     try:
+        # Lazy import ComfyUI modules
+        import folder_paths
+        import comfy.utils
+        
         # Get ComfyUI models directory
         models_dir = folder_paths.models_dir
         dreamlight_dir = os.path.join(models_dir, "dreamlight")
@@ -30,6 +33,7 @@ def validate_and_download_models():
         flux_path = os.path.join(flux_dir, "model.pth")
         if not os.path.exists(flux_path):
             logger.info("Downloading DreamLight FLUX transformer model...")
+            from huggingface_hub import hf_hub_download
             hf_hub_download(
                 repo_id="LYAWWH/DreamLight",
                 filename="FLUX/transformer/model.pth",
@@ -45,6 +49,7 @@ def validate_and_download_models():
         clip_model = os.path.join(clip_dir, "pytorch_model.bin")
         if not os.path.exists(clip_config) or not os.path.exists(clip_model):
             logger.info("Downloading CLIP model...")
+            from huggingface_hub import snapshot_download
             snapshot_download(
                 repo_id="LYAWWH/DreamLight",
                 local_dir=clip_dir,
@@ -96,6 +101,10 @@ class DreamLightNode:
         }
 
     def process(self, foreground_image, background_image, mask, prompt, seed, resolution, environment_map=None):
+        # Lazy import ComfyUI modules
+        import folder_paths
+        import comfy.utils
+        
         # Run validation and download if needed (now safe in process method)
         if not hasattr(self, '_models_validated'):
             if validate_and_download_models():
@@ -212,6 +221,4 @@ class DreamLightNode:
         output_tensor = torch.from_numpy(output_np).unsqueeze(0)
         return (output_tensor,)
         
-NODE_CLASS_MAPPINGS = {
-    "DreamLightNode": DreamLightNode
-}
+NODE_CLASS_MAPPINGS["DreamLightNode"] = DreamLightNode
