@@ -38,7 +38,7 @@ def validate_and_download_models():
             hf_hub_download(
                 repo_id="LYAWWH/DreamLight",
                 filename="FLUX/transformer/model.pth",
-                local_dir=flux_dir,
+                local_dir=dreamlight_dir,  # Download to parent, preserves folder structure
                 local_dir_use_symlinks=False
             )
             logger.info("FLUX transformer downloaded successfully")
@@ -53,9 +53,9 @@ def validate_and_download_models():
             from huggingface_hub import snapshot_download
             snapshot_download(
                 repo_id="LYAWWH/DreamLight",
-                local_dir=clip_dir,
+                local_dir=dreamlight_dir,
                 local_dir_use_symlinks=False,
-                allow_patterns=["CLIP/models/*"]
+                allow_patterns=["CLIP/**"]
             )
             logger.info("CLIP model downloaded successfully")
         else:
