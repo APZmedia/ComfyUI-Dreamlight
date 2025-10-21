@@ -31,39 +31,27 @@ def validate_and_download_models():
         os.makedirs(clip_dir, exist_ok=True)
         
         # Check and download FLUX transformer
-        flux_path = os.path.join(flux_dir, "model.pth")
-        if not os.path.exists(flux_path):
-            logger.info("Downloading DreamLight FLUX transformer model...")
-            from huggingface_hub import hf_hub_download, snapshot_download
+        # The model.pth file doesn't exist in the repository, so we'll download the entire FLUX folder
+        # and look for any .pth, .safetensors, or .bin files
+        flux_files = []
+        for ext in [".pth", ".safetensors", ".bin"]:
+            flux_files.extend([
+                os.path.join(flux_dir, f"model{ext}"),
+                os.path.join(flux_dir, f"transformer{ext}"),
+                os.path.join(flux_dir, f"pytorch_model{ext}")
+            ])
+        
+        flux_model_exists = any(os.path.exists(f) for f in flux_files)
+        
+        if not flux_model_exists:
+            logger.info("Downloading DreamLight FLUX model...")
+            from huggingface_hub import snapshot_download
             import time
             
-            # Try multiple download strategies
             download_success = False
-            
-            # Strategy 1: Try downloading specific file with retry
             for attempt in range(3):
                 try:
-                    logger.info(f"Download attempt {attempt + 1}/3 for FLUX model...")
-                    hf_hub_download(
-                        repo_id="LYAWWH/DreamLight",
-                        filename="FLUX/transformer/model.pth",
-                        local_dir=dreamlight_dir,
-                        local_dir_use_symlinks=False,
-                        resume_download=True  # Resume interrupted downloads
-                    )
-                    if os.path.exists(flux_path):
-                        logger.info("FLUX transformer downloaded successfully")
-                        download_success = True
-                        break
-                except Exception as e:
-                    logger.warning(f"Download attempt {attempt + 1} failed: {e}")
-                    if attempt < 2:  # Don't sleep on last attempt
-                        time.sleep(5)  # Wait before retry
-            
-            # Strategy 2: If specific file fails, try downloading entire FLUX folder
-            if not download_success:
-                try:
-                    logger.info("Attempting to download entire FLUX folder...")
+                    logger.info(f"FLUX download attempt {attempt + 1}/3...")
                     snapshot_download(
                         repo_id="LYAWWH/DreamLight",
                         local_dir=dreamlight_dir,
@@ -71,17 +59,22 @@ def validate_and_download_models():
                         allow_patterns=["FLUX/**"],
                         resume_download=True
                     )
-                    if os.path.exists(flux_path):
-                        logger.info("FLUX folder downloaded successfully")
+                    # Check if any FLUX model files were downloaded
+                    flux_model_exists = any(os.path.exists(f) for f in flux_files)
+                    if flux_model_exists:
+                        logger.info("FLUX model downloaded successfully")
                         download_success = True
+                        break
                 except Exception as e:
-                    logger.error(f"Failed to download FLUX folder: {e}")
+                    logger.warning(f"FLUX download attempt {attempt + 1} failed: {e}")
+                    if attempt < 2:
+                        time.sleep(5)
             
             if not download_success:
-                logger.error("All download attempts failed. Please check your internet connection and try again.")
+                logger.error("FLUX model download failed. Please check your internet connection and try again.")
                 return False
         else:
-            logger.info("FLUX transformer model already exists")
+            logger.info("FLUX model already exists")
         
         # Check and download CLIP model
         clip_config = os.path.join(clip_dir, "config.json")
@@ -233,10 +226,28 @@ class DreamLightNode:
         clip_dir = os.path.join(dreamlight_dir, "CLIP")
         
         # Load DreamLight transformer weights
-        flux_model_path = os.path.join(flux_dir, "model.pth")
-        if not os.path.exists(flux_model_path):
-            raise FileNotFoundError(f"DreamLight FLUX model not found at {flux_model_path}. Please ensure models are downloaded.")
-        transformer_weights = torch.load(flux_model_path, map_location=device)
+        # Look for any model file in the FLUX directory
+        flux_model_path = None
+        for ext in [".pth", ".safetensors", ".bin"]:
+            for filename in [f"model{ext}", f"transformer{ext}", f"pytorch_model{ext}"]:
+                test_path = os.path.join(flux_dir, filename)
+                if os.path.exists(test_path):
+                    flux_model_path = test_path
+                    break
+            if flux_model_path:
+                break
+        
+        if not flux_model_path:
+            raise FileNotFoundError(f"DreamLight FLUX model not found in {flux_dir}. Please ensure models are downloaded.")
+        
+        logger.info(f"Loading FLUX model from: {flux_model_path}")
+        
+        # Load the model file based on its extension
+        if flux_model_path.endswith('.safetensors'):
+            from safetensors.torch import load_file
+            transformer_weights = load_file(flux_model_path, device=device)
+        else:
+            transformer_weights = torch.load(flux_model_path, map_location=device)
         
         # Initialize pipeline
         pipeline = FluxPipeline.from_pretrained(
