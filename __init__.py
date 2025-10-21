@@ -78,7 +78,7 @@ def validate_and_download_models():
 import torch.nn.functional as F
 from transformers import CLIPVisionModelWithProjection, CLIPImageProcessor
 from diffusers import FluxPipeline
-from utils.env_lighting import calculate_spherical_harmonics, generate_spherical_image
+from .utils.env_lighting import calculate_spherical_harmonics, generate_spherical_image
 
 class DreamLightNode:
     """Custom ComfyUI node for DreamLight image relighting"""
