@@ -3,6 +3,10 @@ import numpy as np
 from PIL import Image
 import os
 import logging
+import torch.nn.functional as F
+from transformers import CLIPVisionModelWithProjection, CLIPImageProcessor
+from diffusers import FluxPipeline
+from ..utils.env_lighting import calculate_spherical_harmonics, generate_spherical_image
 
 # Define NODE_CLASS_MAPPINGS early to ensure registration
 NODE_CLASS_MAPPINGS = {
@@ -73,8 +77,6 @@ def validate_and_download_models():
     except Exception as e:
         logger.error(f"Installation validation failed: {e}")
         return False
-
-import torch.nn.functional as F
 
 class DreamLightNode:
     """Custom ComfyUI node for DreamLight image relighting"""
