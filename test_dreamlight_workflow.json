@@ -1,0 +1,52 @@
+{
+  "last_node_id": 5,
+  "last_link_id": 4,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "LoadImage",
+      "widgets_values": [],
+      "fields": {
+        "image": "example_foreground.png"
+      }
+    },
+    {
+      "id": 2,
+      "type": "LoadImage",
+      "widgets_values": [],
+      "fields": {
+        "image": "example_background.png"
+      }
+    },
+    {
+      "id": 3,
+      "type": "LoadImage",
+      "widgets_values": [],
+      "fields": {
+        "image": "example_mask.png"
+      }
+    },
+    {
+      "id": 4,
+      "type": "DreamLightNode",
+      "widgets_values": [
+        "harmonious lighting, natural shadows",
+        42,
+        1024
+      ],
+      "fields": {}
+    },
+    {
+      "id": 5,
+      "type": "PreviewImage",
+      "widgets_values": [],
+      "fields": {}
+    }
+  ],
+  "links": [
+    [1, 0, 4, 0],
+    [2, 0, 4, 1],
+    [3, 0, 4, 2],
+    [4, 0, 5, 0]
+  ]
+}
