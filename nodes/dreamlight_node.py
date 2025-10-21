@@ -69,8 +69,7 @@ def validate_and_download_models():
         logger.error(f"Installation validation failed: {e}")
         return False
 
-# Run validation on import
-validate_and_download_models()
+import torch.nn.functional as F
 
 class DreamLightNode:
     """Custom ComfyUI node for DreamLight image relighting"""
@@ -97,6 +96,15 @@ class DreamLightNode:
         }
 
     def process(self, foreground_image, background_image, mask, prompt, seed, resolution, environment_map=None):
+        # Run validation and download if needed (now safe in process method)
+        if not hasattr(self, '_models_validated'):
+            if validate_and_download_models():
+                self._models_validated = True
+                logger.info("DreamLight models validated for this session")
+            else:
+                logger.warning("Model validation failed - using fallback")
+                self._models_validated = False
+        
         # Convert ComfyUI tensors to numpy arrays
         fg_np = foreground_image[0].cpu().numpy() * 255.0
         bg_np = background_image[0].cpu().numpy() * 255.0
