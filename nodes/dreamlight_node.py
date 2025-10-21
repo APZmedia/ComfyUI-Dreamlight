@@ -83,15 +83,47 @@ class DreamLightNode:
         bg_tensor = bg_tensor.to(device)
         env_tensor = env_tensor.to(device)
         
-        # Initialize pipeline (in a real implementation, this would be cached)
+        # Get node directory to resolve relative paths
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        root_dir = os.path.dirname(current_dir)
+        
+        # Load DreamLight transformer weights
+        flux_model_path = os.path.join(root_dir, "ckpt", "FLUX", "transformer", "model.pth")
+        transformer_weights = torch.load(flux_model_path, map_location=device)
+        
+        # Initialize pipeline
         pipeline = FluxPipeline.from_pretrained(
             "black-forest-labs/FLUX.1-dev",
             torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
         )
+        
+        # Apply DreamLight modifications to transformer
+        transformer = pipeline.transformer
+        extra_channels = 1 + (1 if environment_map is not None else 0)
+        x_embedder = transformer.x_embedder
+        new_x_embedder = torch.nn.Linear(
+            x_embedder.in_features * (1 + 1 + extra_channels),
+            x_embedder.out_features
+        )
+        new_x_embedder.weight.data.zero_()
+        new_x_embedder.weight.data[:, :x_embedder.in_features].copy_(x_embedder.weight.data)
+        new_x_embedder.bias.data.copy_(x_embedder.bias.data)
+        transformer.x_embedder = new_x_embedder
+        transformer.load_state_dict(transformer_weights)
         pipeline.to(device)
+        
+        # Load CLIP model from local checkpoint
+        clip_model_path = os.path.join(root_dir, "ckpt", "CLIP")
+        image_encoder = CLIPVisionModelWithProjection.from_pretrained(clip_model_path).to(device)
+        clip_processor = CLIPImageProcessor()
         
         # Run DreamLight pipeline
         generator = torch.Generator(device).manual_seed(seed) if seed else None
+        mask_tensor = torch.from_numpy(mask_arr).to(device)
+        mask_tensor = F.interpolate(mask_tensor.unsqueeze(0).unsqueeze(0), scale_factor=1/16, mode='nearest')
+        mask_tensor = mask_tensor.flatten(2).transpose(1, 2)[:, :, 0:1]
+        
+        image_embeds = image_encoder(clip_processor(images=bg, return_tensors="pt").pixel_values.to(device)).last_hidden_state
         output = pipeline(
             prompt=prompt,
             height=h,

@@ -16,15 +16,15 @@ pip install -r requirements.txt
 3. Download DreamLight models:
 ```bash
 # Create model directories
-mkdir -p models/dreamlight/FLUX/transformer
-mkdir -p models/dreamlight/CLIP
+mkdir -p ckpt/FLUX/transformer
+mkdir -p ckpt/CLIP
 
-# Download FLUX model
-curl -L "https://huggingface.co/LYAWWH/DreamLight/resolve/main/FLUX/transformer/model.pth?download=true" -o models/dreamlight/FLUX/transformer/model.pth
+# Download FLUX transformer weights
+curl -L "https://huggingface.co/LYAWWH/DreamLight/resolve/main/FLUX/transformer/model.pth" -o ckpt/FLUX/transformer/model.pth
 
 # Download CLIP model
-curl -L "https://huggingface.co/LYAWWH/DreamLight/resolve/main/CLIP/models/config.json?download=true" -o models/dreamlight/CLIP/config.json
-curl -L "https://huggingface.co/LYAWWH/DreamLight/resolve/main/CLIP/models/pytorch_model.bin?download=true" -o models/dreamlight/CLIP/pytorch_model.bin
+curl -L "https://huggingface.co/LYAWWH/DreamLight/resolve/main/CLIP/models/config.json" -o ckpt/CLIP/config.json
+curl -L "https://huggingface.co/LYAWWH/DreamLight/resolve/main/CLIP/models/pytorch_model.bin" -o ckpt/CLIP/pytorch_model.bin
 ```
 
 ## Node Usage
