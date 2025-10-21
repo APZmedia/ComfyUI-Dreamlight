@@ -29,7 +29,7 @@ def validate_and_download_models():
         # Get ComfyUI models directory
         models_dir = folder_paths.models_dir
         dreamlight_dir = os.path.join(models_dir, "dreamlight")
-        flux_dir = os.path.join(dreamlight_dir, "FLUX", "transformer")
+        flux_dir = os.path.join(dreamlight_dir, "FLUX", "DreamLight-FLUX", "transformer")
         clip_dir = os.path.join(dreamlight_dir, "CLIP")
         
         # Create directories
@@ -54,20 +54,38 @@ def validate_and_download_models():
         
         if not flux_model_files:
             logger.info("No FLUX model files found. Downloading FLUX folder...")
-            from huggingface_hub import snapshot_download
+            from huggingface_hub import snapshot_download, hf_hub_download
             import time
             
             download_success = False
             for attempt in range(3):
                 try:
                     logger.info(f"FLUX download attempt {attempt + 1}/3...")
-                    snapshot_download(
-                        repo_id="LYAWWH/DreamLight",
-                        local_dir=dreamlight_dir,
-                        local_dir_use_symlinks=False,
-                        allow_patterns=["FLUX/**"],
-                        resume_download=True
-                    )
+                    
+                    # Try to download the specific model.pth file first
+                    try:
+            hf_hub_download(
+                repo_id="LYAWWH/DreamLight",
+                            filename="FLUX/DreamLight-FLUX/transformer/model.pth",
+                            local_dir=dreamlight_dir,
+                            local_dir_use_symlinks=False,
+                            resume_download=True
+                        )
+                        logger.info("FLUX model.pth downloaded successfully")
+                        download_success = True
+                        break
+                    except Exception as e:
+                        logger.warning(f"Specific file download failed: {e}")
+                        logger.info("Falling back to downloading entire FLUX folder...")
+                        
+                        # Fallback to downloading entire FLUX folder
+                        snapshot_download(
+                            repo_id="LYAWWH/DreamLight",
+                            local_dir=dreamlight_dir,
+                            local_dir_use_symlinks=False,
+                            allow_patterns=["FLUX/**"],
+                            resume_download=True
+                        )
                     
                     # Scan again after download
                     flux_model_files = scan_for_model_files(flux_dir)
@@ -96,10 +114,16 @@ def validate_and_download_models():
                 logger.info(f"  - {os.path.relpath(f, dreamlight_dir)} ({size_mb:.1f} MB)")
         
         # Check and download CLIP model
-        clip_config = os.path.join(clip_dir, "config.json")
-        clip_model = os.path.join(clip_dir, "pytorch_model.bin")
-        if not os.path.exists(clip_config) or not os.path.exists(clip_model):
-            logger.info("Downloading CLIP model...")
+        clip_models_dir = os.path.join(clip_dir, "models")
+        clip_config = os.path.join(clip_models_dir, "config.json")
+        clip_model = os.path.join(clip_models_dir, "pytorch_model.bin")
+        clip_safetensors = os.path.join(clip_models_dir, "model.safetensors")
+        
+        # Check if any CLIP model files exist
+        clip_files_exist = any(os.path.exists(f) for f in [clip_config, clip_model, clip_safetensors])
+        
+        if not clip_files_exist:
+            logger.info("No CLIP model files found. Downloading CLIP folder...")
             from huggingface_hub import snapshot_download
             import time
             
@@ -114,10 +138,16 @@ def validate_and_download_models():
                         allow_patterns=["CLIP/**"],
                         resume_download=True
                     )
-                    if os.path.exists(clip_config) and os.path.exists(clip_model):
+                    
+                    # Check if any CLIP model files were downloaded
+                    clip_files_exist = any(os.path.exists(f) for f in [clip_config, clip_model, clip_safetensors])
+                    if clip_files_exist:
                         logger.info("CLIP model downloaded successfully")
                         download_success = True
                         break
+                    else:
+                        logger.warning("Download completed but no CLIP model files found")
+                        
                 except Exception as e:
                     logger.warning(f"CLIP download attempt {attempt + 1} failed: {e}")
                     if attempt < 2:
@@ -178,8 +208,8 @@ class DreamLightNode:
                 self._models_validated = True
                 logger.info("DreamLight models validated for this session")
             else:
-                logger.warning("Model validation failed - using fallback")
-                self._models_validated = False
+                logger.error("Model validation failed - cannot proceed without models")
+                raise RuntimeError("DreamLight models are not available. Please check the logs for download errors and ensure you have a stable internet connection.")
         
         # Convert ComfyUI tensors to numpy arrays
         fg_np = foreground_image[0].cpu().numpy() * 255.0
@@ -236,7 +266,7 @@ class DreamLightNode:
         import folder_paths
         models_dir = folder_paths.models_dir
         dreamlight_dir = os.path.join(models_dir, "dreamlight")
-        flux_dir = os.path.join(dreamlight_dir, "FLUX", "transformer")
+        flux_dir = os.path.join(dreamlight_dir, "FLUX", "DreamLight-FLUX", "transformer")
         clip_dir = os.path.join(dreamlight_dir, "CLIP")
         
         # Load DreamLight transformer weights
@@ -267,6 +297,10 @@ class DreamLightNode:
         if not flux_model_path:
             flux_model_path = flux_model_files[0]
         
+        # Double-check the file exists before trying to load it
+        if not os.path.exists(flux_model_path):
+            raise FileNotFoundError(f"FLUX model file not found: {flux_model_path}")
+        
         logger.info(f"Loading FLUX model from: {os.path.relpath(flux_model_path, dreamlight_dir)}")
         
         # Load the model file based on its extension
@@ -275,7 +309,7 @@ class DreamLightNode:
                 from safetensors.torch import load_file
                 transformer_weights = load_file(flux_model_path, device=device)
             else:
-                transformer_weights = torch.load(flux_model_path, map_location=device)
+        transformer_weights = torch.load(flux_model_path, map_location=device)
             logger.info("FLUX model loaded successfully")
         except Exception as e:
             logger.error(f"Failed to load FLUX model from {flux_model_path}: {e}")
@@ -303,10 +337,10 @@ class DreamLightNode:
         pipeline.to(device)
         
         # Load CLIP model from local checkpoint
-        clip_model_path = clip_dir
-        if not os.path.exists(clip_model_path):
-            raise FileNotFoundError(f"DreamLight CLIP model not found at {clip_model_path}. Please ensure models are downloaded.")
-        image_encoder = CLIPVisionModelWithProjection.from_pretrained(clip_model_path).to(device)
+        clip_models_dir = os.path.join(clip_dir, "models")
+        if not os.path.exists(clip_models_dir):
+            raise FileNotFoundError(f"DreamLight CLIP model directory not found at {clip_models_dir}. Please ensure models are downloaded.")
+        image_encoder = CLIPVisionModelWithProjection.from_pretrained(clip_models_dir).to(device)
         clip_processor = CLIPImageProcessor()
         
         # Run DreamLight pipeline
