@@ -35,13 +35,26 @@ def validate_and_download_models():
         if not os.path.exists(flux_path):
             logger.info("Downloading DreamLight FLUX transformer model...")
             from huggingface_hub import hf_hub_download
-            hf_hub_download(
-                repo_id="LYAWWH/DreamLight",
-                filename="FLUX/transformer/model.pth",
-                local_dir=dreamlight_dir,  # Download to parent, preserves folder structure
-                local_dir_use_symlinks=False
-            )
-            logger.info("FLUX transformer downloaded successfully")
+            try:
+                # Try to download the specific file
+                hf_hub_download(
+                    repo_id="LYAWWH/DreamLight",
+                    filename="FLUX/transformer/model.pth",
+                    local_dir=dreamlight_dir,
+                    local_dir_use_symlinks=False
+                )
+                logger.info("FLUX transformer downloaded successfully")
+            except Exception as e:
+                logger.warning(f"Failed to download FLUX model: {e}")
+                logger.info("Attempting to download entire FLUX folder...")
+                from huggingface_hub import snapshot_download
+                snapshot_download(
+                    repo_id="LYAWWH/DreamLight",
+                    local_dir=dreamlight_dir,
+                    local_dir_use_symlinks=False,
+                    allow_patterns=["FLUX/**"]
+                )
+                logger.info("FLUX folder downloaded successfully")
         else:
             logger.info("FLUX transformer model already exists")
         
@@ -169,12 +182,17 @@ class DreamLightNode:
         bg_tensor = bg_tensor.to(device)
         env_tensor = env_tensor.to(device)
         
-        # Get node directory to resolve relative paths
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        root_dir = current_dir  # Now in root
+        # Get ComfyUI models directory
+        import folder_paths
+        models_dir = folder_paths.models_dir
+        dreamlight_dir = os.path.join(models_dir, "dreamlight")
+        flux_dir = os.path.join(dreamlight_dir, "FLUX", "transformer")
+        clip_dir = os.path.join(dreamlight_dir, "CLIP")
         
         # Load DreamLight transformer weights
-        flux_model_path = os.path.join(root_dir, "ckpt", "FLUX", "transformer", "model.pth")
+        flux_model_path = os.path.join(flux_dir, "model.pth")
+        if not os.path.exists(flux_model_path):
+            raise FileNotFoundError(f"DreamLight FLUX model not found at {flux_model_path}. Please ensure models are downloaded.")
         transformer_weights = torch.load(flux_model_path, map_location=device)
         
         # Initialize pipeline
@@ -199,7 +217,9 @@ class DreamLightNode:
         pipeline.to(device)
         
         # Load CLIP model from local checkpoint
-        clip_model_path = os.path.join(root_dir, "ckpt", "CLIP")
+        clip_model_path = clip_dir
+        if not os.path.exists(clip_model_path):
+            raise FileNotFoundError(f"DreamLight CLIP model not found at {clip_model_path}. Please ensure models are downloaded.")
         image_encoder = CLIPVisionModelWithProjection.from_pretrained(clip_model_path).to(device)
         clip_processor = CLIPImageProcessor()
         
