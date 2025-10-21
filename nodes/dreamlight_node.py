@@ -4,8 +4,73 @@ from PIL import Image
 import folder_paths
 import comfy.utils
 import os
-from dreamlight_utils.pipeline_flux import FluxPipeline
+import logging
+from huggingface_hub import hf_hub_download, snapshot_download
+from transformers import CLIPVisionModelWithProjection, CLIPImageProcessor
+from diffusers import FluxPipeline
 from .utils.env_lighting import calculate_spherical_harmonics, generate_spherical_image
+
+# Set up logging
+logger = logging.getLogger(__name__)
+
+def validate_and_download_models():
+    """Validate installation and download models if missing"""
+    try:
+        # Get ComfyUI models directory
+        models_dir = folder_paths.models_dir
+        dreamlight_dir = os.path.join(models_dir, "dreamlight")
+        flux_dir = os.path.join(dreamlight_dir, "FLUX", "transformer")
+        clip_dir = os.path.join(dreamlight_dir, "CLIP")
+        
+        # Create directories
+        os.makedirs(flux_dir, exist_ok=True)
+        os.makedirs(clip_dir, exist_ok=True)
+        
+        # Check and download FLUX transformer
+        flux_path = os.path.join(flux_dir, "model.pth")
+        if not os.path.exists(flux_path):
+            logger.info("Downloading DreamLight FLUX transformer model...")
+            hf_hub_download(
+                repo_id="LYAWWH/DreamLight",
+                filename="FLUX/transformer/model.pth",
+                local_dir=flux_dir,
+                local_dir_use_symlinks=False
+            )
+            logger.info("FLUX transformer downloaded successfully")
+        else:
+            logger.info("FLUX transformer model already exists")
+        
+        # Check and download CLIP model
+        clip_config = os.path.join(clip_dir, "config.json")
+        clip_model = os.path.join(clip_dir, "pytorch_model.bin")
+        if not os.path.exists(clip_config) or not os.path.exists(clip_model):
+            logger.info("Downloading CLIP model...")
+            snapshot_download(
+                repo_id="LYAWWH/DreamLight",
+                local_dir=clip_dir,
+                local_dir_use_symlinks=False,
+                allow_patterns=["CLIP/models/*"]
+            )
+            logger.info("CLIP model downloaded successfully")
+        else:
+            logger.info("CLIP model already exists")
+        
+        # Validate GPU
+        if torch.cuda.is_available():
+            logger.info(f"GPU available: {torch.cuda.get_device_name()}")
+            logger.info(f"VRAM: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+        else:
+            logger.warning("No GPU detected - performance may be slow")
+        
+        logger.info("Installation validation completed successfully")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Installation validation failed: {e}")
+        return False
+
+# Run validation on import
+validate_and_download_models()
 
 class DreamLightNode:
     """Custom ComfyUI node for DreamLight image relighting"""
