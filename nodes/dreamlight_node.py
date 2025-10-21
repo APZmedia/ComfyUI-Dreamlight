@@ -40,27 +40,52 @@ def validate_and_download_models():
         flux_path = os.path.join(flux_dir, "model.pth")
         if not os.path.exists(flux_path):
             logger.info("Downloading DreamLight FLUX transformer model...")
-            from huggingface_hub import hf_hub_download
-            try:
-                # Try to download the specific file
-                hf_hub_download(
-                    repo_id="LYAWWH/DreamLight",
-                    filename="FLUX/transformer/model.pth",
-                    local_dir=dreamlight_dir,
-                    local_dir_use_symlinks=False
-                )
-                logger.info("FLUX transformer downloaded successfully")
-            except Exception as e:
-                logger.warning(f"Failed to download FLUX model: {e}")
-                logger.info("Attempting to download entire FLUX folder...")
-                from huggingface_hub import snapshot_download
-                snapshot_download(
-                    repo_id="LYAWWH/DreamLight",
-                    local_dir=dreamlight_dir,
-                    local_dir_use_symlinks=False,
-                    allow_patterns=["FLUX/**"]
-                )
-                logger.info("FLUX folder downloaded successfully")
+            from huggingface_hub import hf_hub_download, snapshot_download
+            import time
+            
+            # Try multiple download strategies
+            download_success = False
+            
+            # Strategy 1: Try downloading specific file with retry
+            for attempt in range(3):
+                try:
+                    logger.info(f"Download attempt {attempt + 1}/3 for FLUX model...")
+                    hf_hub_download(
+                        repo_id="LYAWWH/DreamLight",
+                        filename="FLUX/transformer/model.pth",
+                        local_dir=dreamlight_dir,
+                        local_dir_use_symlinks=False,
+                        resume_download=True  # Resume interrupted downloads
+                    )
+                    if os.path.exists(flux_path):
+                        logger.info("FLUX transformer downloaded successfully")
+                        download_success = True
+                        break
+                except Exception as e:
+                    logger.warning(f"Download attempt {attempt + 1} failed: {e}")
+                    if attempt < 2:  # Don't sleep on last attempt
+                        time.sleep(5)  # Wait before retry
+            
+            # Strategy 2: If specific file fails, try downloading entire FLUX folder
+            if not download_success:
+                try:
+                    logger.info("Attempting to download entire FLUX folder...")
+                    snapshot_download(
+                        repo_id="LYAWWH/DreamLight",
+                        local_dir=dreamlight_dir,
+                        local_dir_use_symlinks=False,
+                        allow_patterns=["FLUX/**"],
+                        resume_download=True
+                    )
+                    if os.path.exists(flux_path):
+                        logger.info("FLUX folder downloaded successfully")
+                        download_success = True
+                except Exception as e:
+                    logger.error(f"Failed to download FLUX folder: {e}")
+            
+            if not download_success:
+                logger.error("All download attempts failed. Please check your internet connection and try again.")
+                return False
         else:
             logger.info("FLUX transformer model already exists")
         
@@ -70,13 +95,31 @@ def validate_and_download_models():
         if not os.path.exists(clip_config) or not os.path.exists(clip_model):
             logger.info("Downloading CLIP model...")
             from huggingface_hub import snapshot_download
-            snapshot_download(
-                repo_id="LYAWWH/DreamLight",
-                local_dir=dreamlight_dir,
-                local_dir_use_symlinks=False,
-                allow_patterns=["CLIP/**"]
-            )
-            logger.info("CLIP model downloaded successfully")
+            import time
+            
+            download_success = False
+            for attempt in range(3):
+                try:
+                    logger.info(f"CLIP download attempt {attempt + 1}/3...")
+                    snapshot_download(
+                        repo_id="LYAWWH/DreamLight",
+                        local_dir=dreamlight_dir,
+                        local_dir_use_symlinks=False,
+                        allow_patterns=["CLIP/**"],
+                        resume_download=True
+                    )
+                    if os.path.exists(clip_config) and os.path.exists(clip_model):
+                        logger.info("CLIP model downloaded successfully")
+                        download_success = True
+                        break
+                except Exception as e:
+                    logger.warning(f"CLIP download attempt {attempt + 1} failed: {e}")
+                    if attempt < 2:
+                        time.sleep(3)
+            
+            if not download_success:
+                logger.error("CLIP model download failed. Please check your internet connection.")
+                return False
         else:
             logger.info("CLIP model already exists")
         
