@@ -37,20 +37,23 @@ def validate_and_download_models():
         os.makedirs(clip_dir, exist_ok=True)
         
         # Check and download FLUX transformer
-        # The model.pth file doesn't exist in the repository, so we'll download the entire FLUX folder
-        # and look for any .pth, .safetensors, or .bin files
-        flux_files = []
-        for ext in [".pth", ".safetensors", ".bin"]:
-            flux_files.extend([
-                os.path.join(flux_dir, f"model{ext}"),
-                os.path.join(flux_dir, f"transformer{ext}"),
-                os.path.join(flux_dir, f"pytorch_model{ext}")
-            ])
+        # Download entire FLUX folder and scan for available model files
+        logger.info("Checking FLUX model files...")
         
-        flux_model_exists = any(os.path.exists(f) for f in flux_files)
+        # Scan for any model files recursively in FLUX directory
+        def scan_for_model_files(directory):
+            model_files = []
+            if os.path.exists(directory):
+                for root, dirs, files in os.walk(directory):
+                    for file in files:
+                        if file.endswith(('.pth', '.safetensors', '.bin')):
+                            model_files.append(os.path.join(root, file))
+            return model_files
         
-        if not flux_model_exists:
-            logger.info("Downloading DreamLight FLUX model...")
+        flux_model_files = scan_for_model_files(flux_dir)
+        
+        if not flux_model_files:
+            logger.info("No FLUX model files found. Downloading FLUX folder...")
             from huggingface_hub import snapshot_download
             import time
             
@@ -65,12 +68,19 @@ def validate_and_download_models():
                         allow_patterns=["FLUX/**"],
                         resume_download=True
                     )
-                    # Check if any FLUX model files were downloaded
-                    flux_model_exists = any(os.path.exists(f) for f in flux_files)
-                    if flux_model_exists:
-                        logger.info("FLUX model downloaded successfully")
+                    
+                    # Scan again after download
+                    flux_model_files = scan_for_model_files(flux_dir)
+                    if flux_model_files:
+                        logger.info(f"FLUX model downloaded successfully. Found {len(flux_model_files)} model files:")
+                        for f in flux_model_files:
+                            size_mb = os.path.getsize(f) / (1024 * 1024)
+                            logger.info(f"  - {os.path.relpath(f, dreamlight_dir)} ({size_mb:.1f} MB)")
                         download_success = True
                         break
+                    else:
+                        logger.warning("Download completed but no model files found")
+                        
                 except Exception as e:
                     logger.warning(f"FLUX download attempt {attempt + 1} failed: {e}")
                     if attempt < 2:
@@ -80,7 +90,10 @@ def validate_and_download_models():
                 logger.error("FLUX model download failed. Please check your internet connection and try again.")
                 return False
         else:
-            logger.info("FLUX model already exists")
+            logger.info(f"FLUX model files already exist ({len(flux_model_files)} files found)")
+            for f in flux_model_files:
+                size_mb = os.path.getsize(f) / (1024 * 1024)
+                logger.info(f"  - {os.path.relpath(f, dreamlight_dir)} ({size_mb:.1f} MB)")
         
         # Check and download CLIP model
         clip_config = os.path.join(clip_dir, "config.json")
@@ -227,28 +240,46 @@ class DreamLightNode:
         clip_dir = os.path.join(dreamlight_dir, "CLIP")
         
         # Load DreamLight transformer weights
-        # Look for any model file in the FLUX directory
-        flux_model_path = None
-        for ext in [".pth", ".safetensors", ".bin"]:
-            for filename in [f"model{ext}", f"transformer{ext}", f"pytorch_model{ext}"]:
-                test_path = os.path.join(flux_dir, filename)
-                if os.path.exists(test_path):
-                    flux_model_path = test_path
-                    break
-            if flux_model_path:
-                break
+        # Scan for model files in the FLUX directory
+        def scan_for_model_files(directory):
+            model_files = []
+            if os.path.exists(directory):
+                for root, dirs, files in os.walk(directory):
+                    for file in files:
+                        if file.endswith(('.pth', '.safetensors', '.bin')):
+                            model_files.append(os.path.join(root, file))
+            return model_files
         
-        if not flux_model_path:
+        flux_model_files = scan_for_model_files(flux_dir)
+        
+        if not flux_model_files:
             raise FileNotFoundError(f"DreamLight FLUX model not found in {flux_dir}. Please ensure models are downloaded.")
         
-        logger.info(f"Loading FLUX model from: {flux_model_path}")
+        # Prefer transformer-specific files, then any model file
+        flux_model_path = None
+        for file_path in flux_model_files:
+            filename = os.path.basename(file_path).lower()
+            if 'transformer' in filename or 'model' in filename:
+                flux_model_path = file_path
+                break
+        
+        # If no specific file found, use the first available
+        if not flux_model_path:
+            flux_model_path = flux_model_files[0]
+        
+        logger.info(f"Loading FLUX model from: {os.path.relpath(flux_model_path, dreamlight_dir)}")
         
         # Load the model file based on its extension
-        if flux_model_path.endswith('.safetensors'):
-            from safetensors.torch import load_file
-            transformer_weights = load_file(flux_model_path, device=device)
-        else:
-            transformer_weights = torch.load(flux_model_path, map_location=device)
+        try:
+            if flux_model_path.endswith('.safetensors'):
+                from safetensors.torch import load_file
+                transformer_weights = load_file(flux_model_path, device=device)
+            else:
+                transformer_weights = torch.load(flux_model_path, map_location=device)
+            logger.info("FLUX model loaded successfully")
+        except Exception as e:
+            logger.error(f"Failed to load FLUX model from {flux_model_path}: {e}")
+            raise
         
         # Initialize pipeline
         pipeline = FluxPipeline.from_pretrained(
