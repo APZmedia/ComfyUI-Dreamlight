@@ -203,45 +203,45 @@ def setup_complete_flux_directory():
                 logger.error("3. Token doesn't have required permissions")
                 logger.error("Please check your token and request access to the model.")
                 raise RuntimeError("Authentication failed for gated FLUX.1-dev model. Please verify your token and access permissions.")
+            else:
+                logger.warning(f"Download attempt {attempt + 1} failed: {e}")
+                if attempt < 2:  # Don't sleep on the last attempt
+                    logger.info(f"Retrying in 10 seconds...")
+                    time.sleep(10)
                 else:
-                    logger.warning(f"Download attempt {attempt + 1} failed: {e}")
-                    if attempt < 2:  # Don't sleep on the last attempt
-                        logger.info(f"Retrying in 10 seconds...")
-                        time.sleep(10)
-                    else:
-                        logger.error(f"✗ All Python download attempts failed")
-                        logger.info("💡 Trying alternative: HuggingFace CLI download...")
+                    logger.error(f"✗ All Python download attempts failed")
+                    logger.info("💡 Trying alternative: HuggingFace CLI download...")
+                    
+                    # Try using HuggingFace CLI as fallback
+                    try:
+                        import subprocess
+                        import shutil
                         
-                        # Try using HuggingFace CLI as fallback
-                        try:
-                            import subprocess
-                            import shutil
+                        # Check if huggingface-cli is available
+                        if shutil.which("huggingface-cli"):
+                            logger.info("Using HuggingFace CLI to download...")
+                            cmd = [
+                                "huggingface-cli", "download",
+                                "black-forest-labs/FLUX.1-dev",
+                                "--local-dir", flux_complete_dir,
+                                "--token", hf_token
+                            ]
+                            result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
                             
-                            # Check if huggingface-cli is available
-                            if shutil.which("huggingface-cli"):
-                                logger.info("Using HuggingFace CLI to download...")
-                                cmd = [
-                                    "huggingface-cli", "download",
-                                    "black-forest-labs/FLUX.1-dev",
-                                    "--local-dir", flux_complete_dir,
-                                    "--token", hf_token
-                                ]
-                                result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
-                                
-                                if result.returncode == 0:
-                                    logger.info("✓ HuggingFace CLI download successful")
-                                    download_success = True
-                                    break
-                                else:
-                                    logger.error(f"HuggingFace CLI failed: {result.stderr}")
+                            if result.returncode == 0:
+                                logger.info("✓ HuggingFace CLI download successful")
+                                download_success = True
+                                break
                             else:
-                                logger.warning("huggingface-cli not found, skipping CLI fallback")
-                                
-                        except Exception as cli_e:
-                            logger.error(f"CLI fallback also failed: {cli_e}")
-                        
-                        if not download_success:
-                            raise RuntimeError(f"FLUX.1-dev download failed after all attempts: {e}")
+                                logger.error(f"HuggingFace CLI failed: {result.stderr}")
+                        else:
+                            logger.warning("huggingface-cli not found, skipping CLI fallback")
+                            
+                    except Exception as cli_e:
+                        logger.error(f"CLI fallback also failed: {cli_e}")
+                    
+                    if not download_success:
+                        raise RuntimeError(f"FLUX.1-dev download failed after all attempts: {e}")
     
     if not download_success:
         raise RuntimeError("FLUX.1-dev download failed after all retry attempts")
