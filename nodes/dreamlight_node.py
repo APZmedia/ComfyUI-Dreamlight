@@ -19,6 +19,91 @@ NODE_CLASS_MAPPINGS = {
 # Set up logging
 logger = logging.getLogger(__name__)
 
+def load_hf_token():
+    """Load HuggingFace token from .env file or environment variables"""
+    try:
+        from dotenv import load_dotenv
+        import os
+        
+        # Load .env file if it exists
+        load_dotenv()
+        
+        # Try to get token from environment
+        token = os.getenv('HF_TOKEN')
+        
+        if token:
+            logger.info("Using HuggingFace token from .env file")
+            return token
+        else:
+            logger.warning("No HF_TOKEN found in .env file - downloads may fail if authentication is required")
+            return None
+            
+    except ImportError:
+        logger.warning("python-dotenv not installed - cannot load .env file")
+        return None
+    except Exception as e:
+        logger.warning(f"Error loading HuggingFace token: {e}")
+        return None
+
+def find_comfyui_flux_model():
+    """Search for existing FLUX.1-dev model in ComfyUI standard directories"""
+    try:
+        import folder_paths
+        
+        # Get ComfyUI models directory
+        models_dir = folder_paths.models_dir
+        
+        # Search locations in priority order
+        search_paths = [
+            # Standard ComfyUI directories
+            os.path.join(models_dir, "unet"),
+            os.path.join(models_dir, "diffusers"),
+            os.path.join(models_dir, "checkpoints"),
+            os.path.join(models_dir, "unet", "flux"),
+            os.path.join(models_dir, "diffusers", "FLUX.1-dev"),
+            # HuggingFace cache
+            os.path.expanduser("~/.cache/huggingface/hub/models--black-forest-labs--FLUX.1-dev"),
+        ]
+        
+        logger.info("Searching for existing FLUX.1-dev model...")
+        
+        for search_path in search_paths:
+            if not os.path.exists(search_path):
+                logger.debug(f"Directory not found: {search_path}")
+                continue
+                
+            logger.debug(f"Searching in: {search_path}")
+            
+            # Look for common FLUX model files
+            flux_patterns = [
+                "flux1-dev.safetensors",
+                "flux1-dev.safetensors.index.json", 
+                "flux1-dev",
+                "FLUX.1-dev",
+                "model.safetensors",
+                "pytorch_model.bin",
+                "model_index.json"
+            ]
+            
+            for root, dirs, files in os.walk(search_path):
+                for file in files:
+                    filename_lower = file.lower()
+                    for pattern in flux_patterns:
+                        if pattern.lower() in filename_lower:
+                            full_path = os.path.join(root, file)
+                            # Check if it's a valid model file
+                            if (file.endswith(('.safetensors', '.bin', '.json')) and 
+                                os.path.getsize(full_path) > 1024):  # At least 1KB
+                                logger.info(f"Found FLUX.1-dev at: {full_path}")
+                                return full_path
+                                
+        logger.info("No existing FLUX.1-dev model found in ComfyUI directories")
+        return None
+        
+    except Exception as e:
+        logger.warning(f"Error searching for FLUX model: {e}")
+        return None
+
 def validate_and_download_models():
     """Validate installation and download models if missing"""
     try:
@@ -64,8 +149,8 @@ def validate_and_download_models():
                     
                     # Try to download the specific model.pth file first
                     try:
-            hf_hub_download(
-                repo_id="LYAWWH/DreamLight",
+                        hf_hub_download(
+                            repo_id="LYAWWH/DreamLight",
                             filename="FLUX/DreamLight-FLUX/transformer/model.pth",
                             local_dir=dreamlight_dir,
                             local_dir_use_symlinks=False,
@@ -309,17 +394,44 @@ class DreamLightNode:
                 from safetensors.torch import load_file
                 transformer_weights = load_file(flux_model_path, device=device)
             else:
-        transformer_weights = torch.load(flux_model_path, map_location=device)
+                transformer_weights = torch.load(flux_model_path, map_location=device)
             logger.info("FLUX model loaded successfully")
         except Exception as e:
             logger.error(f"Failed to load FLUX model from {flux_model_path}: {e}")
             raise
         
-        # Initialize pipeline
-        pipeline = FluxPipeline.from_pretrained(
-            "black-forest-labs/FLUX.1-dev",
-            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
-        )
+        # Initialize pipeline - check for existing FLUX model first
+        flux_model_path = find_comfyui_flux_model()
+        
+        if flux_model_path:
+            logger.info(f"Using existing FLUX.1-dev model from: {flux_model_path}")
+            logger.info("Skipping 23GB download - using local model")
+            # Use local model path
+            pipeline = FluxPipeline.from_pretrained(
+                flux_model_path,
+                torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
+            )
+        else:
+            logger.warning("FLUX.1-dev not found in ComfyUI model directories")
+            logger.info("Downloading FLUX.1-dev from HuggingFace (~23GB)")
+            
+            # Load HuggingFace token for authentication
+            hf_token = load_hf_token()
+            
+            # Fall back to downloading from HuggingFace
+            try:
+                pipeline = FluxPipeline.from_pretrained(
+                    "black-forest-labs/FLUX.1-dev",
+                    torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+                    token=hf_token
+                )
+            except Exception as e:
+                if "authentication" in str(e).lower() or "token" in str(e).lower():
+                    logger.error("Authentication failed. Please check your HF_TOKEN in .env file")
+                    logger.error("Get your token from: https://huggingface.co/settings/tokens")
+                    raise RuntimeError("HuggingFace authentication failed. Please set HF_TOKEN in .env file")
+                else:
+                    raise
         
         # Apply DreamLight modifications to transformer
         transformer = pipeline.transformer

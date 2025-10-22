@@ -13,7 +13,17 @@ cd ComfyUI-Dreamlight
 pip install -r requirements.txt
 ```
 
-3. Download DreamLight models:
+3. Set up HuggingFace authentication (optional but recommended):
+```bash
+# Copy the example environment file
+cp .env.example .env
+
+# Edit .env and add your HuggingFace token
+# Get your token from: https://huggingface.co/settings/tokens
+echo "HF_TOKEN=your_huggingface_token_here" > .env
+```
+
+4. Download DreamLight models:
 ```bash
 # Create model directories
 mkdir -p ckpt/FLUX/transformer
@@ -48,6 +58,11 @@ The node appears under "image/postprocessing" as "DreamLightNode"
    - `example_foreground.png`
    - `example_background.png`
    - `example_mask.png`
+
+## Model Management
+- **Smart Model Detection**: DreamLight automatically searches for existing FLUX.1-dev models in ComfyUI's standard directories before downloading
+- **HuggingFace Authentication**: Set `HF_TOKEN` in `.env` file for authenticated downloads
+- **Fallback Download**: If no local model is found, downloads from HuggingFace (~23GB)
 
 ## Notes
 - First run will take longer as it downloads additional dependencies
