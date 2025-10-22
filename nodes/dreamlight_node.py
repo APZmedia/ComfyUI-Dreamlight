@@ -155,9 +155,21 @@ def setup_complete_flux_directory():
     
     # Download complete model from HuggingFace
     logger.info("Downloading FLUX.1-dev from HuggingFace...")
+    logger.info("⚠️  FLUX.1-dev is a GATED model - authentication required!")
     logger.info("This will download ~23GB, but only non-transformer components will be kept")
     
     hf_token = load_hf_token()
+    
+    if not hf_token:
+        logger.error("✗ No HuggingFace token found!")
+        logger.error("FLUX.1-dev is a gated model that requires authentication.")
+        logger.error("Please set HF_TOKEN in your .env file:")
+        logger.error("1. Get your token from: https://huggingface.co/settings/tokens")
+        logger.error("2. Request access to FLUX.1-dev: https://huggingface.co/black-forest-labs/FLUX.1-dev")
+        logger.error("3. Add to .env file: HF_TOKEN=your_token_here")
+        raise RuntimeError("HuggingFace token required for gated FLUX.1-dev model. Please set HF_TOKEN in .env file and request access to the model.")
+    
+    logger.info(f"✓ Using HuggingFace token for authentication")
     
     try:
         snapshot_download(
@@ -169,8 +181,17 @@ def setup_complete_flux_directory():
         )
         logger.info("✓ Download complete")
     except Exception as e:
-        logger.error(f"✗ Download failed: {e}")
-        raise
+        if "authentication" in str(e).lower() or "token" in str(e).lower() or "gated" in str(e).lower():
+            logger.error("✗ Authentication failed!")
+            logger.error("This could be due to:")
+            logger.error("1. Invalid or expired token")
+            logger.error("2. No access granted to FLUX.1-dev model")
+            logger.error("3. Token doesn't have required permissions")
+            logger.error("Please check your token and request access to the model.")
+            raise RuntimeError("Authentication failed for gated FLUX.1-dev model. Please verify your token and access permissions.")
+        else:
+            logger.error(f"✗ Download failed: {e}")
+            raise
     
     # If we have local transformer weights, copy/link them
     if transformer_weights_path:

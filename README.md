@@ -13,15 +13,22 @@ cd ComfyUI-Dreamlight
 pip install -r requirements.txt
 ```
 
-3. Set up HuggingFace authentication (optional but recommended):
+3. Set up HuggingFace authentication (REQUIRED for FLUX.1-dev):
 ```bash
 # Copy the example environment file
 cp .env.example .env
 
-# Edit .env and add your HuggingFace token
-# Get your token from: https://huggingface.co/settings/tokens
+# Get your HuggingFace token and request access to FLUX.1-dev
+# 1. Get your token from: https://huggingface.co/settings/tokens
+# 2. Request access to FLUX.1-dev: https://huggingface.co/black-forest-labs/FLUX.1-dev
+# 3. Add your token to .env file:
 echo "HF_TOKEN=your_huggingface_token_here" > .env
 ```
+
+**⚠️ IMPORTANT**: FLUX.1-dev is a **gated model** that requires:
+- Valid HuggingFace token
+- Access approval from the model authors
+- Authentication for all downloads
 
 4. Download DreamLight models:
 ```bash
@@ -92,17 +99,21 @@ cd dreamlight/flux_complete
 
 2. **Download the complete FLUX.1-dev model from HuggingFace:**
 ```bash
-# Option A: Using git (recommended)
-git clone https://huggingface.co/black-forest-labs/FLUX.1-dev .
+# ⚠️ FLUX.1-dev is GATED - authentication required!
 
-# Option B: Using huggingface-hub
+# Option A: Using git (requires authentication)
+git clone https://huggingface.co/black-forest-labs/FLUX.1-dev .
+# You'll be prompted for your HuggingFace username and token
+
+# Option B: Using huggingface-hub (recommended)
 pip install huggingface-hub
 python -c "
 from huggingface_hub import snapshot_download
 snapshot_download(
     repo_id='black-forest-labs/FLUX.1-dev',
     local_dir='.',
-    local_dir_use_symlinks=False
+    local_dir_use_symlinks=False,
+    token='your_hf_token_here'  # Required for gated models
 )
 "
 ```
@@ -154,11 +165,16 @@ ls -la ComfyUI/models/dreamlight/CLIP/models/
 **Issue: "Error no file named diffusion_pytorch_model.bin found"**
 - **Solution**: The FLUX directory is incomplete. Use the manual installation steps above.
 
-**Issue: "Authentication failed"**
-- **Solution**: Set up HuggingFace token:
+**Issue: "Authentication failed" or "HuggingFace token required"**
+- **Solution**: FLUX.1-dev is gated - you need:
+  1. **Get HuggingFace token**: https://huggingface.co/settings/tokens
+  2. **Request access to FLUX.1-dev**: https://huggingface.co/black-forest-labs/FLUX.1-dev
+  3. **Set token in .env file**:
 ```bash
 echo "HF_TOKEN=your_token_here" > .env
 ```
+  4. **Wait for access approval** (may take time)
+  5. **Restart ComfyUI** after setting token
 
 **Issue: "Out of memory"**
 - **Solution**: Reduce resolution or use CPU:
