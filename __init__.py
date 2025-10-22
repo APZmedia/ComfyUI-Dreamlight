@@ -151,9 +151,11 @@ def setup_complete_flux_directory():
     # Download complete model from HuggingFace
     logger.info("Downloading FLUX.1-dev from HuggingFace...")
     logger.info("⚠️  FLUX.1-dev is a GATED model - authentication required!")
-    logger.info("This will download ~23GB, but only non-transformer components will be kept")
+    logger.info("This will download the complete FLUX.1-dev repository (~23GB)")
     logger.info("💡 Large download in progress - this may take 10-30 minutes depending on your connection")
     logger.info("💡 The download will resume automatically if interrupted")
+    logger.info("💡 Alternative: You can also download manually using:")
+    logger.info("   huggingface-cli download black-forest-labs/FLUX.1-dev --local-dir " + flux_complete_dir)
     
     hf_token = load_hf_token()
     
@@ -176,17 +178,16 @@ def setup_complete_flux_directory():
         try:
             logger.info(f"FLUX.1-dev download attempt {attempt + 1}/3...")
             
-            # If we have local transformer weights, only ignore the weights file, not the config
-            ignore_patterns = []
-            if transformer_weights_path:
-                ignore_patterns = ["transformer/diffusion_pytorch_model.safetensors"]
+            # Download the entire FLUX.1-dev repository
+            # This will get all files including sharded transformer files
+            logger.info("Downloading complete FLUX.1-dev repository...")
+            logger.info("This includes all components: VAE, text encoders, transformer, tokenizers, scheduler")
             
             snapshot_download(
                 repo_id="black-forest-labs/FLUX.1-dev",
                 local_dir=flux_complete_dir,
                 local_dir_use_symlinks=False,
                 token=hf_token,
-                ignore_patterns=ignore_patterns,
                 resume_download=True  # Enable resume for large downloads
             )
             logger.info("✓ Download complete")
@@ -202,14 +203,45 @@ def setup_complete_flux_directory():
                 logger.error("3. Token doesn't have required permissions")
                 logger.error("Please check your token and request access to the model.")
                 raise RuntimeError("Authentication failed for gated FLUX.1-dev model. Please verify your token and access permissions.")
-            else:
-                logger.warning(f"Download attempt {attempt + 1} failed: {e}")
-                if attempt < 2:  # Don't sleep on the last attempt
-                    logger.info(f"Retrying in 10 seconds...")
-                    time.sleep(10)
                 else:
-                    logger.error(f"✗ All download attempts failed")
-                    raise RuntimeError(f"FLUX.1-dev download failed after 3 attempts: {e}")
+                    logger.warning(f"Download attempt {attempt + 1} failed: {e}")
+                    if attempt < 2:  # Don't sleep on the last attempt
+                        logger.info(f"Retrying in 10 seconds...")
+                        time.sleep(10)
+                    else:
+                        logger.error(f"✗ All Python download attempts failed")
+                        logger.info("💡 Trying alternative: HuggingFace CLI download...")
+                        
+                        # Try using HuggingFace CLI as fallback
+                        try:
+                            import subprocess
+                            import shutil
+                            
+                            # Check if huggingface-cli is available
+                            if shutil.which("huggingface-cli"):
+                                logger.info("Using HuggingFace CLI to download...")
+                                cmd = [
+                                    "huggingface-cli", "download",
+                                    "black-forest-labs/FLUX.1-dev",
+                                    "--local-dir", flux_complete_dir,
+                                    "--token", hf_token
+                                ]
+                                result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+                                
+                                if result.returncode == 0:
+                                    logger.info("✓ HuggingFace CLI download successful")
+                                    download_success = True
+                                    break
+                                else:
+                                    logger.error(f"HuggingFace CLI failed: {result.stderr}")
+                            else:
+                                logger.warning("huggingface-cli not found, skipping CLI fallback")
+                                
+                        except Exception as cli_e:
+                            logger.error(f"CLI fallback also failed: {cli_e}")
+                        
+                        if not download_success:
+                            raise RuntimeError(f"FLUX.1-dev download failed after all attempts: {e}")
     
     if not download_success:
         raise RuntimeError("FLUX.1-dev download failed after all retry attempts")
@@ -292,7 +324,7 @@ def validate_flux_directory(flux_dir):
         "vae": {"files": ["config.json", "diffusion_pytorch_model.safetensors"], "critical": True},
         "text_encoder": {"files": ["config.json", "model.safetensors"], "critical": True},
         "text_encoder_2": {"files": ["config.json", "model.safetensors"], "critical": False},  # Optional
-        "transformer": {"files": ["config.json", "diffusion_pytorch_model.safetensors"], "critical": True},
+        "transformer": {"files": ["config.json", "diffusion_pytorch_model.safetensors"], "critical": True},  # Critical but can be sharded
         "tokenizer": {"files": ["tokenizer_config.json"], "critical": True},
         "tokenizer_2": {"files": ["tokenizer_config.json"], "critical": True},
         "scheduler": {"files": ["scheduler_config.json"], "critical": True}
@@ -304,15 +336,29 @@ def validate_flux_directory(flux_dir):
         if os.path.exists(single_file):
             return single_file, False
         
-        # Check for sharded files
+        # Check for sharded files with various patterns
         import glob
-        shard_pattern = os.path.join(component_dir, f"{base_filename}.*")
-        shard_files = glob.glob(shard_pattern)
-        if shard_files:
-            # Filter out index files and get only the actual shard files
-            shard_files = [f for f in shard_files if not f.endswith('.index.json')]
+        
+        # Try different shard patterns
+        shard_patterns = [
+            f"{base_filename}.*",  # diffusion_pytorch_model.safetensors.*
+            f"{base_filename}.00001",  # diffusion_pytorch_model.safetensors.00001
+            f"{base_filename}.0001",   # diffusion_pytorch_model.safetensors.0001
+            f"{base_filename}.001",    # diffusion_pytorch_model.safetensors.001
+            f"{base_filename}.01",     # diffusion_pytorch_model.safetensors.01
+            f"{base_filename}.1",      # diffusion_pytorch_model.safetensors.1
+        ]
+        
+        for pattern in shard_patterns:
+            shard_pattern = os.path.join(component_dir, pattern)
+            shard_files = glob.glob(shard_pattern)
             if shard_files:
-                return shard_files[0], True  # Return first shard as representative
+                # Filter out index files and get only the actual shard files
+                shard_files = [f for f in shard_files if not f.endswith('.index.json')]
+                if shard_files:
+                    # Sort shard files to get the first one
+                    shard_files.sort()
+                    return shard_files[0], True  # Return first shard as representative
         
         return None, False
     
@@ -329,7 +375,13 @@ def validate_flux_directory(flux_dir):
                 if file_path and os.path.exists(file_path):
                     size_mb = os.path.getsize(file_path) / (1024 * 1024)
                     if is_sharded:
-                        logger.info(f"  ✓ {req_file} (sharded, {size_mb:.1f} MB per shard)")
+                        # Count total shard files for this component
+                        import glob
+                        shard_pattern = os.path.join(component_dir, f"{req_file}.*")
+                        all_shards = glob.glob(shard_pattern)
+                        all_shards = [f for f in all_shards if not f.endswith('.index.json')]
+                        total_size = sum(os.path.getsize(f) for f in all_shards) / (1024 * 1024)
+                        logger.info(f"  ✓ {req_file} (sharded, {len(all_shards)} parts, {total_size:.1f} MB total)")
                     else:
                         logger.info(f"  ✓ {req_file} ({size_mb:.1f} MB)")
                     component_checks.append(True)
@@ -584,65 +636,22 @@ class DreamLightNode:
             
             # Validate FLUX directory before proceeding
             if not validate_flux_directory(flux_dir):
-                logger.warning("="*60)
-                logger.warning("FLUX DIRECTORY VALIDATION FAILED - ATTEMPTING RECOVERY")
-                logger.warning("="*60)
-                
-                # Try to download missing critical files
-                logger.info("Attempting to download missing critical files...")
-                hf_token = load_hf_token()
-                
-                if hf_token:
-                    try:
-                        from huggingface_hub import hf_hub_download
-                        
-                        # List of critical files that might be missing
-                        critical_files = [
-                            "text_encoder_2/model.safetensors",
-                            "transformer/diffusion_pytorch_model.safetensors"
-                        ]
-                        
-                        for missing_file in critical_files:
-                            try:
-                                logger.info(f"Attempting to download {missing_file}...")
-                                hf_hub_download(
-                                    repo_id="black-forest-labs/FLUX.1-dev",
-                                    filename=missing_file,
-                                    local_dir=flux_dir,
-                                    local_dir_use_symlinks=False,
-                                    token=hf_token
-                                )
-                                logger.info(f"✓ Successfully downloaded {missing_file}")
-                            except Exception as e:
-                                logger.warning(f"Could not download {missing_file}: {e}")
-                        
-                        # Re-validate after download attempts
-                        logger.info("Re-validating FLUX directory after download attempts...")
-                        if validate_flux_directory(flux_dir):
-                            logger.info("✓ FLUX directory validation passed after recovery attempts")
-                        else:
-                            raise RuntimeError("FLUX directory validation still failed after recovery attempts")
-                            
-                    except Exception as e:
-                        logger.error(f"Recovery attempt failed: {e}")
-                        raise RuntimeError("FLUX directory validation failed and recovery attempts were unsuccessful")
-                else:
-                    logger.error("="*60)
-                    logger.error("FLUX DIRECTORY VALIDATION FAILED")
-                    logger.error("="*60)
-                    logger.error("The FLUX model directory is missing critical components.")
-                    logger.error("This usually means:")
-                    logger.error("1. The model download was incomplete")
-                    logger.error("2. You don't have access to the gated FLUX.1-dev model")
-                    logger.error("3. Your HuggingFace token is invalid or expired")
-                    logger.error("")
-                    logger.error("To fix this:")
-                    logger.error("1. Get a HuggingFace token from: https://huggingface.co/settings/tokens")
-                    logger.error("2. Request access to FLUX.1-dev: https://huggingface.co/black-forest-labs/FLUX.1-dev")
-                    logger.error("3. Add HF_TOKEN=your_token_here to your .env file")
-                    logger.error("4. Restart ComfyUI to retry the download")
-                    logger.error("="*60)
-                    raise RuntimeError("FLUX directory validation failed. Please check the logs for detailed instructions on how to fix this issue.")
+                logger.error("="*60)
+                logger.error("FLUX DIRECTORY VALIDATION FAILED")
+                logger.error("="*60)
+                logger.error("The FLUX model directory is missing critical components.")
+                logger.error("This usually means:")
+                logger.error("1. The model download was incomplete")
+                logger.error("2. You don't have access to the gated FLUX.1-dev model")
+                logger.error("3. Your HuggingFace token is invalid or expired")
+                logger.error("")
+                logger.error("To fix this:")
+                logger.error("1. Get a HuggingFace token from: https://huggingface.co/settings/tokens")
+                logger.error("2. Request access to FLUX.1-dev: https://huggingface.co/black-forest-labs/FLUX.1-dev")
+                logger.error("3. Add HF_TOKEN=your_token_here to your .env file")
+                logger.error("4. Restart ComfyUI to retry the download")
+                logger.error("="*60)
+                raise RuntimeError("FLUX directory validation failed. Please check the logs for detailed instructions on how to fix this issue.")
             
             # Test FLUX pipeline loading
             logger.info("Testing FLUX pipeline loading...")
