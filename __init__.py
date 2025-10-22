@@ -20,7 +20,7 @@ def load_hf_token():
             return token
         else:
             logger.warning("✗ No HF_TOKEN found in .env file")
-            return None
+        return None
     except Exception as e:
         logger.warning(f"Could not load .env file: {e}")
         return None
@@ -86,12 +86,38 @@ def setup_flux_directory():
         
         # Verify what we actually got
         logger.info("Verifying downloaded files...")
-        for root, dirs, files in os.walk(flux_complete_dir):
-            for file in files:
-                if "transformer" in root and ".safetensors" in file:
-                    file_path = os.path.join(root, file)
+        transformer_dir = os.path.join(flux_complete_dir, "transformer")
+        if os.path.exists(transformer_dir):
+            logger.info(f"Transformer directory contents:")
+            for file in sorted(os.listdir(transformer_dir)):
+                file_path = os.path.join(transformer_dir, file)
+                if os.path.isfile(file_path):
                     size_mb = os.path.getsize(file_path) / (1024 * 1024)
-                    logger.info(f"  ✓ {os.path.relpath(file_path, flux_complete_dir)} ({size_mb:.1f} MB)")
+                    logger.info(f"  📄 {file} ({size_mb:.1f} MB)")
+                else:
+                    logger.info(f"  📁 {file}/")
+        else:
+            logger.warning("Transformer directory not found!")
+        
+        # Check model_index.json to see what files are expected
+        model_index_path = os.path.join(flux_complete_dir, "model_index.json")
+        if os.path.exists(model_index_path):
+            logger.info("Checking model_index.json for expected files...")
+            import json
+            with open(model_index_path, 'r') as f:
+                model_index = json.load(f)
+            
+            if "transformer" in model_index:
+                transformer_info = model_index["transformer"]
+                logger.info(f"Transformer config: {transformer_info}")
+                
+                # Check if there's a weight_map or similar
+                if "weight_map" in transformer_info:
+                    logger.info("Weight map found:")
+                    for key, value in transformer_info["weight_map"].items():
+                        logger.info(f"  {key} -> {value}")
+        else:
+            logger.warning("model_index.json not found!")
         
         return flux_complete_dir
         
@@ -112,7 +138,7 @@ def validate_flux_directory(flux_dir):
     if not os.path.exists(flux_dir):
         logger.error(f"✗ FLUX directory does not exist: {flux_dir}")
         return False
-    
+
     logger.info("✓ FLUX directory exists")
     return True
 
@@ -145,8 +171,8 @@ def validate_and_download_models():
                 torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
             )
             logger.info("✓ FLUX pipeline loaded successfully")
-            
-        except Exception as e:
+                        
+                except Exception as e:
             logger.error(f"✗ FLUX pipeline loading failed: {e}")
             raise RuntimeError(f"FLUX pipeline loading failed: {e}")
         
@@ -159,7 +185,7 @@ def validate_and_download_models():
 
 class DreamLightNode:
     """ComfyUI node for DreamLight relighting"""
-    
+
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -185,7 +211,7 @@ class DreamLightNode:
         """Initialize node and validate models immediately"""
         # Run model validation on node creation, not during processing
         validate_and_download_models()
-    
+
     def process(self, foreground_image, background_image, mask, prompt, seed, resolution, environment_map=None):
         # Models are already validated in __init__, so we can proceed directly
         
@@ -195,16 +221,16 @@ class DreamLightNode:
             import numpy as np
             from PIL import Image
             import comfy.utils
-            
-            # Load pipeline (already validated during __init__)
-            logger.info("Loading FLUX pipeline from pre-validated directory...")
-            pipeline = FluxPipeline.from_pretrained(
-                flux_dir,
-                torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
-            )
-            
-            # Apply DreamLight modifications to transformer
-            transformer = pipeline.transformer
+        
+        # Load pipeline (already validated during __init__)
+        logger.info("Loading FLUX pipeline from pre-validated directory...")
+        pipeline = FluxPipeline.from_pretrained(
+            flux_dir,
+            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
+        )
+        
+        # Apply DreamLight modifications to transformer
+        transformer = pipeline.transformer
             
             # Convert inputs to PIL Images
             if isinstance(foreground_image, torch.Tensor):
@@ -252,15 +278,15 @@ class DreamLightNode:
             # Generate image
             with torch.no_grad():
                 result = pipeline(
-                    prompt=prompt,
+            prompt=prompt,
                     image=composite,
                     num_inference_steps=20,
                     guidance_scale=7.5,
                     generator=generator,
                     height=resolution,
                     width=resolution
-                ).images[0]
-            
+        ).images[0]
+        
             # Convert result back to ComfyUI format
             result_tensor = comfy.utils.pil2tensor(result)
             
@@ -283,4 +309,4 @@ NODE_DISPLAY_NAME_MAPPINGS = {
 # Package initialization
 logger.info("ComfyUI-Dreamlight package loaded successfully")
 logger.info("Registered nodes: ['DreamLightNode']")
-logger.info("Successfully registered DreamLightNode in image/postprocessing category")
+    logger.info("Successfully registered DreamLightNode in image/postprocessing category")
