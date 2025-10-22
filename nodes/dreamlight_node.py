@@ -172,12 +172,17 @@ def setup_complete_flux_directory():
     logger.info(f"✓ Using HuggingFace token for authentication")
     
     try:
+        # If we have local transformer weights, only ignore the weights file, not the config
+        ignore_patterns = []
+        if transformer_weights_path:
+            ignore_patterns = ["transformer/diffusion_pytorch_model.safetensors"]
+        
         snapshot_download(
             repo_id="black-forest-labs/FLUX.1-dev",
             local_dir=flux_complete_dir,
             local_dir_use_symlinks=False,
             token=hf_token,
-            ignore_patterns=["transformer/*"] if transformer_weights_path else []
+            ignore_patterns=ignore_patterns
         )
         logger.info("✓ Download complete")
     except Exception as e:
@@ -205,6 +210,37 @@ def setup_complete_flux_directory():
             logger.info(f"Copying transformer weights to {target_weights}")
             shutil.copy2(transformer_weights_path, target_weights)
             logger.info("✓ Transformer weights copied")
+    
+    # Check for missing critical files and try to download them individually
+    missing_files = []
+    
+    # Check text_encoder_2/model.safetensors
+    text_encoder_2_model = os.path.join(flux_complete_dir, "text_encoder_2", "model.safetensors")
+    if not os.path.exists(text_encoder_2_model):
+        missing_files.append("text_encoder_2/model.safetensors")
+    
+    # Check transformer/config.json
+    transformer_config = os.path.join(flux_complete_dir, "transformer", "config.json")
+    if not os.path.exists(transformer_config):
+        missing_files.append("transformer/config.json")
+    
+    # Download missing files individually
+    if missing_files:
+        logger.info(f"Downloading {len(missing_files)} missing files individually...")
+        from huggingface_hub import hf_hub_download
+        
+        for missing_file in missing_files:
+            try:
+                hf_hub_download(
+                    repo_id="black-forest-labs/FLUX.1-dev",
+                    filename=missing_file,
+                    local_dir=flux_complete_dir,
+                    local_dir_use_symlinks=False,
+                    token=hf_token
+                )
+                logger.info(f"✓ Downloaded {missing_file}")
+            except Exception as e:
+                logger.warning(f"Could not download {missing_file}: {e}")
     
     return flux_complete_dir
 
