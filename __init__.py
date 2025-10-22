@@ -246,18 +246,8 @@ def setup_complete_flux_directory():
     if not download_success:
         raise RuntimeError("FLUX.1-dev download failed after all retry attempts")
     
-    # If we have local transformer weights, copy/link them
-    if transformer_weights_path:
-        transformer_dir = os.path.join(flux_complete_dir, "transformer")
-        os.makedirs(transformer_dir, exist_ok=True)
-        
-        # Copy the weights file
-        import shutil
-        target_weights = os.path.join(transformer_dir, "diffusion_pytorch_model.safetensors")
-        if not os.path.exists(target_weights):
-            logger.info(f"Copying transformer weights to {target_weights}")
-            shutil.copy2(transformer_weights_path, target_weights)
-            logger.info("✓ Transformer weights copied")
+    # Note: Transformer weights are now handled by the complete FLUX.1-dev download
+    # No need to copy local weights since we download the entire repository
     
     # Check for missing critical files and try to download them individually
     missing_files = []
@@ -267,12 +257,7 @@ def setup_complete_flux_directory():
     if not os.path.exists(text_encoder_2_model):
         missing_files.append("text_encoder_2/model.safetensors")
     
-    # Check transformer/diffusion_pytorch_model.safetensors
-    transformer_weights = os.path.join(flux_complete_dir, "transformer", "diffusion_pytorch_model.safetensors")
-    if not os.path.exists(transformer_weights):
-        missing_files.append("transformer/diffusion_pytorch_model.safetensors")
-    
-    # Check transformer/config.json
+    # Check transformer/config.json (only config is needed, diffusers handles sharded files)
     transformer_config = os.path.join(flux_complete_dir, "transformer", "config.json")
     if not os.path.exists(transformer_config):
         missing_files.append("transformer/config.json")
