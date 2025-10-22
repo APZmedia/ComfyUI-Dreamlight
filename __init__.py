@@ -324,7 +324,7 @@ def validate_flux_directory(flux_dir):
         "vae": {"files": ["config.json", "diffusion_pytorch_model.safetensors"], "critical": True},
         "text_encoder": {"files": ["config.json", "model.safetensors"], "critical": True},
         "text_encoder_2": {"files": ["config.json", "model.safetensors"], "critical": False},  # Optional
-        "transformer": {"files": ["config.json", "diffusion_pytorch_model.safetensors"], "critical": True},  # Critical but can be sharded
+        "transformer": {"files": ["config.json"], "critical": True},  # Only config is needed, diffusers handles sharded files
         "tokenizer": {"files": ["tokenizer_config.json"], "critical": True},
         "tokenizer_2": {"files": ["tokenizer_config.json"], "critical": True},
         "scheduler": {"files": ["scheduler_config.json"], "critical": True}
