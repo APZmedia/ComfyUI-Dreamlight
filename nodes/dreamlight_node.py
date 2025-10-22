@@ -45,64 +45,72 @@ def load_hf_token():
         logger.warning(f"Error loading HuggingFace token: {e}")
         return None
 
-def find_comfyui_flux_model():
-    """Search for existing FLUX.1-dev model in ComfyUI standard directories"""
-    try:
-        import folder_paths
-        
-        # Get ComfyUI models directory
-        models_dir = folder_paths.models_dir
-        
-        # Search locations in priority order
-        search_paths = [
-            # Standard ComfyUI directories
-            os.path.join(models_dir, "unet"),
-            os.path.join(models_dir, "diffusers"),
-            os.path.join(models_dir, "checkpoints"),
-            os.path.join(models_dir, "unet", "flux"),
-            os.path.join(models_dir, "diffusers", "FLUX.1-dev"),
-            # HuggingFace cache
-            os.path.expanduser("~/.cache/huggingface/hub/models--black-forest-labs--FLUX.1-dev"),
-        ]
-        
-        logger.info("Searching for existing FLUX.1-dev model...")
-        
-        for search_path in search_paths:
-            if not os.path.exists(search_path):
-                logger.debug(f"Directory not found: {search_path}")
-                continue
-                
-            logger.debug(f"Searching in: {search_path}")
+def download_flux_configs(target_dir, hf_token=None):
+    """Download only config files for FLUX.1-dev model"""
+    from huggingface_hub import hf_hub_download
+    
+    config_files = [
+        "model_index.json",
+        "scheduler/scheduler_config.json",
+        "text_encoder/config.json",
+        "text_encoder_2/config.json", 
+        "tokenizer/tokenizer_config.json",
+        "tokenizer/vocab.json",
+        "tokenizer/merges.txt",
+        "tokenizer_2/tokenizer_config.json",
+        "tokenizer_2/vocab.json",
+        "tokenizer_2/merges.txt",
+        "transformer/config.json",
+        "vae/config.json"
+    ]
+    
+    for config_file in config_files:
+        try:
+            hf_hub_download(
+                repo_id="black-forest-labs/FLUX.1-dev",
+                filename=config_file,
+                local_dir=target_dir,
+                local_dir_use_symlinks=False,
+                token=hf_token
+            )
+            logger.info(f"Downloaded {config_file}")
+        except Exception as e:
+            logger.warning(f"Could not download {config_file}: {e}")
+
+def find_and_setup_flux_model():
+    """Find existing FLUX weights and ensure config files exist"""
+    import folder_paths
+    
+    models_dir = folder_paths.models_dir
+    search_paths = [
+        os.path.join(models_dir, "unet"),
+        os.path.join(models_dir, "diffusers"),
+        os.path.join(models_dir, "checkpoints"),
+        os.path.join(models_dir, "diffusers", "FLUX.1-dev"),
+        os.path.expanduser("~/.cache/huggingface/hub/models--black-forest-labs--FLUX.1-dev")
+    ]
+    
+    for search_path in search_paths:
+        if not os.path.exists(search_path):
+            continue
             
-            # Look for common FLUX model files
-            flux_patterns = [
-                "flux1-dev.safetensors",
-                "flux1-dev.safetensors.index.json", 
-                "flux1-dev",
-                "FLUX.1-dev",
-                "model.safetensors",
-                "pytorch_model.bin",
-                "model_index.json"
-            ]
-            
-            for root, dirs, files in os.walk(search_path):
-                for file in files:
-                    filename_lower = file.lower()
-                    for pattern in flux_patterns:
-                        if pattern.lower() in filename_lower:
-                            full_path = os.path.join(root, file)
-                            # Check if it's a valid model file
-                            if (file.endswith(('.safetensors', '.bin', '.json')) and 
-                                os.path.getsize(full_path) > 1024):  # At least 1KB
-                                logger.info(f"Found FLUX.1-dev at: {full_path}")
-                                return full_path
-                                
-        logger.info("No existing FLUX.1-dev model found in ComfyUI directories")
-        return None
-        
-    except Exception as e:
-        logger.warning(f"Error searching for FLUX model: {e}")
-        return None
+        for root, dirs, files in os.walk(search_path):
+            for file in files:
+                if file.lower() == "flux1-dev.safetensors" or file.lower() == "diffusion_pytorch_model.safetensors":
+                    weights_dir = root
+                    logger.info(f"Found FLUX weights at: {weights_dir}")
+                    
+                    # Check if config files exist
+                    model_index = os.path.join(weights_dir, "model_index.json")
+                    if not os.path.exists(model_index):
+                        logger.info("Config files missing, downloading...")
+                        hf_token = load_hf_token()
+                        download_flux_configs(weights_dir, hf_token)
+                    
+                    return weights_dir
+    
+    return None
+
 
 def validate_and_download_models():
     """Validate installation and download models if missing"""
@@ -358,84 +366,24 @@ class DreamLightNode:
         flux_dir = os.path.join(dreamlight_dir, "FLUX", "DreamLight-FLUX", "transformer")
         clip_dir = os.path.join(dreamlight_dir, "CLIP")
         
-        # Load DreamLight transformer weights
-        # Scan for model files in the FLUX directory
-        def scan_for_model_files(directory):
-            model_files = []
-            if os.path.exists(directory):
-                for root, dirs, files in os.walk(directory):
-                    for file in files:
-                        if file.endswith(('.pth', '.safetensors', '.bin')):
-                            model_files.append(os.path.join(root, file))
-            return model_files
         
-        flux_model_files = scan_for_model_files(flux_dir)
-        
-        if not flux_model_files:
-            raise FileNotFoundError(f"DreamLight FLUX model not found in {flux_dir}. Please ensure models are downloaded.")
-        
-        # Prefer transformer-specific files, then any model file
-        flux_model_path = None
-        for file_path in flux_model_files:
-            filename = os.path.basename(file_path).lower()
-            if 'transformer' in filename or 'model' in filename:
-                flux_model_path = file_path
-                break
-        
-        # If no specific file found, use the first available
-        if not flux_model_path:
-            flux_model_path = flux_model_files[0]
-        
-        # Double-check the file exists before trying to load it
-        if not os.path.exists(flux_model_path):
-            raise FileNotFoundError(f"FLUX model file not found: {flux_model_path}")
-        
-        logger.info(f"Loading FLUX model from: {os.path.relpath(flux_model_path, dreamlight_dir)}")
-        
-        # Load the model file based on its extension
-        try:
-            if flux_model_path.endswith('.safetensors'):
-                from safetensors.torch import load_file
-                transformer_weights = load_file(flux_model_path, device=device)
-            else:
-                transformer_weights = torch.load(flux_model_path, map_location=device)
-            logger.info("FLUX model loaded successfully")
-        except Exception as e:
-            logger.error(f"Failed to load FLUX model from {flux_model_path}: {e}")
-            raise
-        
-        # Initialize pipeline - check for existing FLUX model first
-        flux_model_path = find_comfyui_flux_model()
-        
-        if flux_model_path:
-            logger.info(f"Using existing FLUX.1-dev model from: {flux_model_path}")
-            logger.info("Skipping 23GB download - using local model")
-            # Use local model path
+        # Find existing FLUX model and set up configs if needed
+        flux_model_dir = find_and_setup_flux_model()
+
+        if flux_model_dir:
+            logger.info(f"Using FLUX model from: {flux_model_dir}")
             pipeline = FluxPipeline.from_pretrained(
-                flux_model_path,
+                flux_model_dir,
                 torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
             )
         else:
-            logger.warning("FLUX.1-dev not found in ComfyUI model directories")
-            logger.info("Downloading FLUX.1-dev from HuggingFace (~23GB)")
-            
-            # Load HuggingFace token for authentication
+            logger.info("No local FLUX weights found, downloading from HuggingFace...")
             hf_token = load_hf_token()
-            
-            # Fall back to downloading from HuggingFace
-            try:
-                pipeline = FluxPipeline.from_pretrained(
-                    "black-forest-labs/FLUX.1-dev",
-                    torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-                    token=hf_token
-                )
-            except Exception as e:
-                if "authentication" in str(e).lower() or "token" in str(e).lower():
-                    logger.error("Authentication failed. Please check your HF_TOKEN in .env file")
-                    logger.error("Get your token from: https://huggingface.co/settings/tokens")
-                    raise RuntimeError("HuggingFace authentication failed. Please set HF_TOKEN in .env file")
-                else:
-                    raise
+            pipeline = FluxPipeline.from_pretrained(
+                "black-forest-labs/FLUX.1-dev",
+                torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+                token=hf_token
+            )
         
         # Apply DreamLight modifications to transformer
         transformer = pipeline.transformer
@@ -449,7 +397,6 @@ class DreamLightNode:
         new_x_embedder.weight.data[:, :x_embedder.in_features].copy_(x_embedder.weight.data)
         new_x_embedder.bias.data.copy_(x_embedder.bias.data)
         transformer.x_embedder = new_x_embedder
-        transformer.load_state_dict(transformer_weights)
         pipeline.to(device)
         
         # Load CLIP model from local checkpoint
