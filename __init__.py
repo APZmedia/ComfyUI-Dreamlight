@@ -252,25 +252,29 @@ def validate_flux_directory(flux_dir):
     logger.info("="*60)
     
     checks = []
+    critical_components = []
+    optional_components = []
     
-    # Check model_index.json
+    # Check model_index.json (critical)
     model_index_path = os.path.join(flux_dir, "model_index.json")
     if os.path.exists(model_index_path):
         logger.info("✓ model_index.json found")
         checks.append(True)
+        critical_components.append(True)
     else:
         logger.error("✗ model_index.json NOT found")
         checks.append(False)
+        critical_components.append(False)
     
-    # Check each component
+    # Define components with their criticality
     components = {
-        "vae": ["config.json", "diffusion_pytorch_model.safetensors"],
-        "text_encoder": ["config.json", "model.safetensors"],
-        "text_encoder_2": ["config.json", "model.safetensors"],
-        "transformer": ["config.json", "diffusion_pytorch_model.safetensors"],
-        "tokenizer": ["tokenizer_config.json"],
-        "tokenizer_2": ["tokenizer_config.json"],
-        "scheduler": ["scheduler_config.json"]
+        "vae": {"files": ["config.json", "diffusion_pytorch_model.safetensors"], "critical": True},
+        "text_encoder": {"files": ["config.json", "model.safetensors"], "critical": True},
+        "text_encoder_2": {"files": ["config.json", "model.safetensors"], "critical": False},  # Optional
+        "transformer": {"files": ["config.json", "diffusion_pytorch_model.safetensors"], "critical": True},
+        "tokenizer": {"files": ["tokenizer_config.json"], "critical": True},
+        "tokenizer_2": {"files": ["tokenizer_config.json"], "critical": True},
+        "scheduler": {"files": ["scheduler_config.json"], "critical": True}
     }
     
     def check_sharded_file(component_dir, base_filename):
@@ -291,10 +295,14 @@ def validate_flux_directory(flux_dir):
         
         return None, False
     
-    for component, required_files in components.items():
+    for component, component_info in components.items():
         component_dir = os.path.join(flux_dir, component)
+        is_critical = component_info["critical"]
+        required_files = component_info["files"]
+        
         if os.path.exists(component_dir):
             logger.info(f"✓ {component}/ directory found")
+            component_checks = []
             for req_file in required_files:
                 file_path, is_sharded = check_sharded_file(component_dir, req_file)
                 if file_path and os.path.exists(file_path):
@@ -303,21 +311,56 @@ def validate_flux_directory(flux_dir):
                         logger.info(f"  ✓ {req_file} (sharded, {size_mb:.1f} MB per shard)")
                     else:
                         logger.info(f"  ✓ {req_file} ({size_mb:.1f} MB)")
-                    checks.append(True)
+                    component_checks.append(True)
                 else:
-                    logger.error(f"  ✗ {req_file} NOT found")
+                    if is_critical:
+                        logger.error(f"  ✗ {req_file} NOT found")
+                    else:
+                        logger.warning(f"  ⚠ {req_file} NOT found (optional)")
+                    component_checks.append(False)
+            
+            # For critical components, all files must be present
+            if is_critical:
+                if all(component_checks):
+                    checks.append(True)
+                    critical_components.append(True)
+                else:
                     checks.append(False)
+                    critical_components.append(False)
+            else:
+                # For optional components, we just track them
+                if all(component_checks):
+                    checks.append(True)
+                    optional_components.append(True)
+                else:
+                    checks.append(False)
+                    optional_components.append(False)
         else:
-            logger.error(f"✗ {component}/ directory NOT found")
-            checks.append(False)
+            if is_critical:
+                logger.error(f"✗ {component}/ directory NOT found")
+                checks.append(False)
+                critical_components.append(False)
+            else:
+                logger.warning(f"⚠ {component}/ directory NOT found (optional)")
+                checks.append(False)
+                optional_components.append(False)
     
     logger.info("="*60)
-    if all(checks):
-        logger.info("✓ ALL FLIGHT CHECKS PASSED")
+    
+    # Check if all critical components are present
+    critical_passed = all(critical_components)
+    optional_passed = sum(optional_components)
+    total_optional = len(optional_components)
+    
+    if critical_passed:
+        logger.info("✓ ALL CRITICAL FLIGHT CHECKS PASSED")
+        if total_optional > 0:
+            logger.info(f"✓ Optional components: {optional_passed}/{total_optional} available")
         logger.info("="*60)
         return True
     else:
-        logger.error(f"✗ FLIGHT CHECKS FAILED ({sum(checks)}/{len(checks)} passed)")
+        logger.error(f"✗ CRITICAL FLIGHT CHECKS FAILED ({sum(critical_components)}/{len(critical_components)} critical components passed)")
+        logger.error("Missing critical components will prevent the node from working properly.")
         logger.info("="*60)
         return False
 
@@ -520,7 +563,65 @@ class DreamLightNode:
             
             # Validate FLUX directory before proceeding
             if not validate_flux_directory(flux_dir):
-                raise RuntimeError("FLUX directory validation failed. See logs for details.")
+                logger.warning("="*60)
+                logger.warning("FLUX DIRECTORY VALIDATION FAILED - ATTEMPTING RECOVERY")
+                logger.warning("="*60)
+                
+                # Try to download missing critical files
+                logger.info("Attempting to download missing critical files...")
+                hf_token = load_hf_token()
+                
+                if hf_token:
+                    try:
+                        from huggingface_hub import hf_hub_download
+                        
+                        # List of critical files that might be missing
+                        critical_files = [
+                            "text_encoder_2/model.safetensors",
+                            "transformer/diffusion_pytorch_model.safetensors"
+                        ]
+                        
+                        for missing_file in critical_files:
+                            try:
+                                logger.info(f"Attempting to download {missing_file}...")
+                                hf_hub_download(
+                                    repo_id="black-forest-labs/FLUX.1-dev",
+                                    filename=missing_file,
+                                    local_dir=flux_dir,
+                                    local_dir_use_symlinks=False,
+                                    token=hf_token
+                                )
+                                logger.info(f"✓ Successfully downloaded {missing_file}")
+                            except Exception as e:
+                                logger.warning(f"Could not download {missing_file}: {e}")
+                        
+                        # Re-validate after download attempts
+                        logger.info("Re-validating FLUX directory after download attempts...")
+                        if validate_flux_directory(flux_dir):
+                            logger.info("✓ FLUX directory validation passed after recovery attempts")
+                        else:
+                            raise RuntimeError("FLUX directory validation still failed after recovery attempts")
+                            
+                    except Exception as e:
+                        logger.error(f"Recovery attempt failed: {e}")
+                        raise RuntimeError("FLUX directory validation failed and recovery attempts were unsuccessful")
+                else:
+                    logger.error("="*60)
+                    logger.error("FLUX DIRECTORY VALIDATION FAILED")
+                    logger.error("="*60)
+                    logger.error("The FLUX model directory is missing critical components.")
+                    logger.error("This usually means:")
+                    logger.error("1. The model download was incomplete")
+                    logger.error("2. You don't have access to the gated FLUX.1-dev model")
+                    logger.error("3. Your HuggingFace token is invalid or expired")
+                    logger.error("")
+                    logger.error("To fix this:")
+                    logger.error("1. Get a HuggingFace token from: https://huggingface.co/settings/tokens")
+                    logger.error("2. Request access to FLUX.1-dev: https://huggingface.co/black-forest-labs/FLUX.1-dev")
+                    logger.error("3. Add HF_TOKEN=your_token_here to your .env file")
+                    logger.error("4. Restart ComfyUI to retry the download")
+                    logger.error("="*60)
+                    raise RuntimeError("FLUX directory validation failed. Please check the logs for detailed instructions on how to fix this issue.")
             
             # Test FLUX pipeline loading
             logger.info("Testing FLUX pipeline loading...")
