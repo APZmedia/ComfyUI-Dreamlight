@@ -60,10 +60,12 @@ The node appears under "image/postprocessing" as "DreamLightNode"
    - `example_mask.png`
 
 ## Model Management
-- **Early Model Validation**: Models are checked and downloaded when the node is first created, preventing OOM errors during processing
-- **Smart Model Detection**: DreamLight automatically searches for existing FLUX.1-dev models in ComfyUI's standard directories before downloading
+- **Pre-Flight Validation**: All models are downloaded, validated, and tested during node initialization - before any inference is attempted
+- **Complete FLUX Pipeline**: Downloads and validates the entire FLUX.1-dev pipeline (transformer, VAE, text encoders, tokenizers, scheduler)
+- **Smart Model Detection**: Automatically searches for existing FLUX transformer weights and reuses them to save bandwidth
+- **Comprehensive Flight Checks**: Validates all required components with detailed logging before proceeding
 - **HuggingFace Authentication**: Set `HF_TOKEN` in `.env` file for authenticated downloads
-- **Fallback Download**: If no local model is found, downloads from HuggingFace (~23GB)
+- **Fail-Fast Design**: Node initialization will fail immediately if models can't be downloaded or validated
 
 ## Notes
 - First run will take longer as it downloads additional dependencies
@@ -72,8 +74,136 @@ The node appears under "image/postprocessing" as "DreamLightNode"
 - Environment maps should be 360° equirectangular images
 
 ## Troubleshooting
+
+### Automatic Setup Issues
+If the automatic model setup fails, you can manually install the required models:
+
+#### Manual FLUX Model Installation
+
+1. **Create the complete FLUX directory structure:**
+```bash
+# Navigate to your ComfyUI models directory
+cd ComfyUI/models
+
+# Create the dedicated FLUX directory
+mkdir -p dreamlight/flux_complete
+cd dreamlight/flux_complete
+```
+
+2. **Download the complete FLUX.1-dev model from HuggingFace:**
+```bash
+# Option A: Using git (recommended)
+git clone https://huggingface.co/black-forest-labs/FLUX.1-dev .
+
+# Option B: Using huggingface-hub
+pip install huggingface-hub
+python -c "
+from huggingface_hub import snapshot_download
+snapshot_download(
+    repo_id='black-forest-labs/FLUX.1-dev',
+    local_dir='.',
+    local_dir_use_symlinks=False
+)
+"
+```
+
+3. **If you have existing FLUX weights, replace the transformer:**
+```bash
+# If you have flux1-dev.safetensors elsewhere, copy it:
+cp /path/to/your/flux1-dev.safetensors transformer/diffusion_pytorch_model.safetensors
+```
+
+#### Manual CLIP Model Installation
+
+1. **Create CLIP directory:**
+```bash
+mkdir -p ComfyUI/models/dreamlight/CLIP/models
+cd ComfyUI/models/dreamlight/CLIP/models
+```
+
+2. **Download CLIP model files:**
+```bash
+# Download config and model files
+wget https://huggingface.co/LYAWWH/DreamLight/resolve/main/CLIP/models/config.json
+wget https://huggingface.co/LYAWWH/DreamLight/resolve/main/CLIP/models/pytorch_model.bin
+```
+
+#### Verification Steps
+
+After manual installation, verify the structure:
+
+```bash
+# Check FLUX directory structure
+ls -la ComfyUI/models/dreamlight/flux_complete/
+# Should contain: model_index.json, vae/, text_encoder/, text_encoder_2/, transformer/, tokenizer/, tokenizer_2/, scheduler/
+
+# Check each component has required files
+ls -la ComfyUI/models/dreamlight/flux_complete/vae/
+# Should contain: config.json, diffusion_pytorch_model.safetensors
+
+ls -la ComfyUI/models/dreamlight/flux_complete/transformer/
+# Should contain: config.json, diffusion_pytorch_model.safetensors
+
+# Check CLIP directory
+ls -la ComfyUI/models/dreamlight/CLIP/models/
+# Should contain: config.json, pytorch_model.bin
+```
+
+#### Common Issues and Solutions
+
+**Issue: "Error no file named diffusion_pytorch_model.bin found"**
+- **Solution**: The FLUX directory is incomplete. Use the manual installation steps above.
+
+**Issue: "Authentication failed"**
+- **Solution**: Set up HuggingFace token:
+```bash
+echo "HF_TOKEN=your_token_here" > .env
+```
+
+**Issue: "Out of memory"**
+- **Solution**: Reduce resolution or use CPU:
+```python
+# In the node, set resolution to 512 or lower
+```
+
+**Issue: "Model validation failed"**
+- **Solution**: Check the logs for specific missing files and download them manually.
+
+#### Directory Structure Reference
+
+The complete directory structure should look like:
+```
+ComfyUI/models/dreamlight/
+├── flux_complete/
+│   ├── model_index.json
+│   ├── vae/
+│   │   ├── config.json
+│   │   └── diffusion_pytorch_model.safetensors
+│   ├── text_encoder/
+│   │   ├── config.json
+│   │   └── model.safetensors
+│   ├── text_encoder_2/
+│   │   ├── config.json
+│   │   └── model.safetensors
+│   ├── transformer/
+│   │   ├── config.json
+│   │   └── diffusion_pytorch_model.safetensors
+│   ├── tokenizer/
+│   │   └── tokenizer_config.json
+│   ├── tokenizer_2/
+│   │   └── tokenizer_config.json
+│   └── scheduler/
+│       └── scheduler_config.json
+└── CLIP/
+    └── models/
+        ├── config.json
+        └── pytorch_model.bin
+```
+
+### General Troubleshooting
 If you encounter issues:
 1. Verify all model files are in the correct directories
 2. Ensure you have the required dependencies
 3. Check console for specific error messages
 4. Try reducing resolution if out of memory
+5. Use the manual installation steps above if automatic setup fails

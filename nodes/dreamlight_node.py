@@ -77,8 +77,8 @@ def download_flux_configs(target_dir, hf_token=None):
         except Exception as e:
             logger.warning(f"Could not download {config_file}: {e}")
 
-def find_and_setup_flux_model():
-    """Find existing FLUX weights and ensure config files exist"""
+def find_flux_transformer_weights():
+    """Find existing FLUX transformer weights in ComfyUI directories"""
     import folder_paths
     
     models_dir = folder_paths.models_dir
@@ -86,30 +86,162 @@ def find_and_setup_flux_model():
         os.path.join(models_dir, "unet"),
         os.path.join(models_dir, "diffusers"),
         os.path.join(models_dir, "checkpoints"),
-        os.path.join(models_dir, "diffusers", "FLUX.1-dev"),
+        os.path.join(models_dir, "unet", "FLUX1"),
         os.path.expanduser("~/.cache/huggingface/hub/models--black-forest-labs--FLUX.1-dev")
     ]
     
+    logger.info("Searching for FLUX transformer weights...")
+    
     for search_path in search_paths:
         if not os.path.exists(search_path):
+            logger.debug(f"  ✗ {search_path} (not found)")
             continue
-            
+        
+        logger.debug(f"  → Scanning {search_path}")
+        
         for root, dirs, files in os.walk(search_path):
             for file in files:
-                if file.lower() == "flux1-dev.safetensors" or file.lower() == "diffusion_pytorch_model.safetensors":
-                    weights_dir = root
-                    logger.info(f"Found FLUX weights at: {weights_dir}")
-                    
-                    # Check if config files exist
-                    model_index = os.path.join(weights_dir, "model_index.json")
-                    if not os.path.exists(model_index):
-                        logger.info("Config files missing, downloading...")
-                        hf_token = load_hf_token()
-                        download_flux_configs(weights_dir, hf_token)
-                    
-                    return weights_dir
+                if file.lower() in ["flux1-dev.safetensors", "diffusion_pytorch_model.safetensors"]:
+                    full_path = os.path.join(root, file)
+                    size_mb = os.path.getsize(full_path) / (1024 * 1024)
+                    logger.info(f"  ✓ Found: {full_path} ({size_mb:.1f} MB)")
+                    return full_path
     
+    logger.warning("  ✗ No transformer weights found")
     return None
+
+def setup_complete_flux_directory():
+    """Create a complete FLUX pipeline directory with local transformer weights"""
+    import folder_paths
+    from huggingface_hub import snapshot_download
+    
+    models_dir = folder_paths.models_dir
+    
+    # Create dedicated directory for complete FLUX pipeline
+    flux_complete_dir = os.path.join(models_dir, "dreamlight", "flux_complete")
+    os.makedirs(flux_complete_dir, exist_ok=True)
+    
+    logger.info("="*60)
+    logger.info("FLIGHT CHECK: Setting up complete FLUX pipeline directory")
+    logger.info(f"Target directory: {flux_complete_dir}")
+    logger.info("="*60)
+    
+    # Check if already set up
+    required_components = {
+        "model_index.json": os.path.join(flux_complete_dir, "model_index.json"),
+        "vae": os.path.join(flux_complete_dir, "vae", "config.json"),
+        "text_encoder": os.path.join(flux_complete_dir, "text_encoder", "config.json"),
+        "text_encoder_2": os.path.join(flux_complete_dir, "text_encoder_2", "config.json"),
+        "scheduler": os.path.join(flux_complete_dir, "scheduler", "scheduler_config.json"),
+        "transformer": os.path.join(flux_complete_dir, "transformer", "config.json")
+    }
+    
+    all_exist = all(os.path.exists(path) for path in required_components.values())
+    
+    if all_exist:
+        logger.info("✓ All required components already exist")
+        return flux_complete_dir
+    
+    logger.info("✗ Missing components detected, will download from HuggingFace")
+    
+    # Find local transformer weights
+    transformer_weights_path = find_flux_transformer_weights()
+    
+    if transformer_weights_path:
+        logger.info(f"✓ Found local transformer weights: {transformer_weights_path}")
+    else:
+        logger.warning("✗ No local transformer weights found")
+        logger.info("Will download complete model from HuggingFace")
+    
+    # Download complete model from HuggingFace
+    logger.info("Downloading FLUX.1-dev from HuggingFace...")
+    logger.info("This will download ~23GB, but only non-transformer components will be kept")
+    
+    hf_token = load_hf_token()
+    
+    try:
+        snapshot_download(
+            repo_id="black-forest-labs/FLUX.1-dev",
+            local_dir=flux_complete_dir,
+            local_dir_use_symlinks=False,
+            token=hf_token,
+            ignore_patterns=["transformer/*"] if transformer_weights_path else []
+        )
+        logger.info("✓ Download complete")
+    except Exception as e:
+        logger.error(f"✗ Download failed: {e}")
+        raise
+    
+    # If we have local transformer weights, copy/link them
+    if transformer_weights_path:
+        transformer_dir = os.path.join(flux_complete_dir, "transformer")
+        os.makedirs(transformer_dir, exist_ok=True)
+        
+        # Copy the weights file
+        import shutil
+        target_weights = os.path.join(transformer_dir, "diffusion_pytorch_model.safetensors")
+        if not os.path.exists(target_weights):
+            logger.info(f"Copying transformer weights to {target_weights}")
+            shutil.copy2(transformer_weights_path, target_weights)
+            logger.info("✓ Transformer weights copied")
+    
+    return flux_complete_dir
+
+def validate_flux_directory(flux_dir):
+    """Validate that FLUX directory has all required components"""
+    logger.info("="*60)
+    logger.info("FLIGHT CHECK: Validating FLUX pipeline directory")
+    logger.info(f"Directory: {flux_dir}")
+    logger.info("="*60)
+    
+    checks = []
+    
+    # Check model_index.json
+    model_index_path = os.path.join(flux_dir, "model_index.json")
+    if os.path.exists(model_index_path):
+        logger.info("✓ model_index.json found")
+        checks.append(True)
+    else:
+        logger.error("✗ model_index.json NOT found")
+        checks.append(False)
+    
+    # Check each component
+    components = {
+        "vae": ["config.json", "diffusion_pytorch_model.safetensors"],
+        "text_encoder": ["config.json", "model.safetensors"],
+        "text_encoder_2": ["config.json", "model.safetensors"],
+        "transformer": ["config.json", "diffusion_pytorch_model.safetensors"],
+        "tokenizer": ["tokenizer_config.json"],
+        "tokenizer_2": ["tokenizer_config.json"],
+        "scheduler": ["scheduler_config.json"]
+    }
+    
+    for component, required_files in components.items():
+        component_dir = os.path.join(flux_dir, component)
+        if os.path.exists(component_dir):
+            logger.info(f"✓ {component}/ directory found")
+            for req_file in required_files:
+                file_path = os.path.join(component_dir, req_file)
+                if os.path.exists(file_path):
+                    size_mb = os.path.getsize(file_path) / (1024 * 1024)
+                    logger.info(f"  ✓ {req_file} ({size_mb:.1f} MB)")
+                    checks.append(True)
+                else:
+                    logger.error(f"  ✗ {req_file} NOT found")
+                    checks.append(False)
+        else:
+            logger.error(f"✗ {component}/ directory NOT found")
+            checks.append(False)
+    
+    logger.info("="*60)
+    if all(checks):
+        logger.info("✓ ALL FLIGHT CHECKS PASSED")
+        logger.info("="*60)
+        return True
+    else:
+        logger.error(f"✗ FLIGHT CHECKS FAILED ({sum(checks)}/{len(checks)} passed)")
+        logger.info("="*60)
+        return False
 
 
 def validate_and_download_models():
@@ -298,11 +430,35 @@ class DreamLightNode:
         # Run model validation on node creation, not during processing
         if not DreamLightNode._models_validated:
             logger.info("DreamLight node initialized - validating models...")
+            
+            # Setup complete FLUX directory with flight checks
+            logger.info("Setting up FLUX pipeline directory...")
+            flux_dir = setup_complete_flux_directory()
+            
+            # Validate FLUX directory before proceeding
+            if not validate_flux_directory(flux_dir):
+                raise RuntimeError("FLUX directory validation failed. See logs for details.")
+            
+            # Test FLUX pipeline loading
+            logger.info("Testing FLUX pipeline loading...")
+            try:
+                from diffusers import FluxPipeline
+                test_pipeline = FluxPipeline.from_pretrained(
+                    flux_dir,
+                    torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
+                )
+                logger.info("✓ FLUX pipeline loaded successfully")
+                del test_pipeline  # Clean up test pipeline
+            except Exception as e:
+                logger.error(f"✗ FLUX pipeline loading failed: {e}")
+                raise RuntimeError(f"FLUX pipeline loading failed: {e}")
+            
+            # Validate DreamLight models
             if validate_and_download_models():
                 DreamLightNode._models_validated = True
-                logger.info("DreamLight models validated successfully")
+                logger.info("✓ All DreamLight models validated successfully")
             else:
-                logger.error("DreamLight model validation failed")
+                logger.error("✗ DreamLight model validation failed")
                 raise RuntimeError("DreamLight models are not available. Please check the logs for download errors and ensure you have a stable internet connection.")
 
     def process(self, foreground_image, background_image, mask, prompt, seed, resolution, environment_map=None):
@@ -367,23 +523,17 @@ class DreamLightNode:
         clip_dir = os.path.join(dreamlight_dir, "CLIP")
         
         
-        # Find existing FLUX model and set up configs if needed
-        flux_model_dir = find_and_setup_flux_model()
-
-        if flux_model_dir:
-            logger.info(f"Using FLUX model from: {flux_model_dir}")
-            pipeline = FluxPipeline.from_pretrained(
-                flux_model_dir,
-                torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
-            )
-        else:
-            logger.info("No local FLUX weights found, downloading from HuggingFace...")
-            hf_token = load_hf_token()
-            pipeline = FluxPipeline.from_pretrained(
-                "black-forest-labs/FLUX.1-dev",
-                torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-                token=hf_token
-            )
+        # Get the pre-validated FLUX directory (setup during __init__)
+        import folder_paths
+        models_dir = folder_paths.models_dir
+        flux_dir = os.path.join(models_dir, "dreamlight", "flux_complete")
+        
+        # Load pipeline (already validated during __init__)
+        logger.info("Loading FLUX pipeline from pre-validated directory...")
+        pipeline = FluxPipeline.from_pretrained(
+            flux_dir,
+            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
+        )
         
         # Apply DreamLight modifications to transformer
         transformer = pipeline.transformer
