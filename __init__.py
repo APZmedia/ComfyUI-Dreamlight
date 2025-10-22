@@ -171,8 +171,8 @@ def validate_and_download_models():
                 torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
             )
             logger.info("✓ FLUX pipeline loaded successfully")
-                        
-                except Exception as e:
+            
+        except Exception as e:
             logger.error(f"✗ FLUX pipeline loading failed: {e}")
             raise RuntimeError(f"FLUX pipeline loading failed: {e}")
         
