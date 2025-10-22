@@ -152,6 +152,8 @@ def setup_complete_flux_directory():
     logger.info("Downloading FLUX.1-dev from HuggingFace...")
     logger.info("⚠️  FLUX.1-dev is a GATED model - authentication required!")
     logger.info("This will download ~23GB, but only non-transformer components will be kept")
+    logger.info("💡 Large download in progress - this may take 10-30 minutes depending on your connection")
+    logger.info("💡 The download will resume automatically if interrupted")
     
     hf_token = load_hf_token()
     
@@ -166,32 +168,51 @@ def setup_complete_flux_directory():
     
     logger.info(f"✓ Using HuggingFace token for authentication")
     
-    try:
-        # If we have local transformer weights, only ignore the weights file, not the config
-        ignore_patterns = []
-        if transformer_weights_path:
-            ignore_patterns = ["transformer/diffusion_pytorch_model.safetensors"]
-        
-        snapshot_download(
-            repo_id="black-forest-labs/FLUX.1-dev",
-            local_dir=flux_complete_dir,
-            local_dir_use_symlinks=False,
-            token=hf_token,
-            ignore_patterns=ignore_patterns
-        )
-        logger.info("✓ Download complete")
-    except Exception as e:
-        if "authentication" in str(e).lower() or "token" in str(e).lower() or "gated" in str(e).lower():
-            logger.error("✗ Authentication failed!")
-            logger.error("This could be due to:")
-            logger.error("1. Invalid or expired token")
-            logger.error("2. No access granted to FLUX.1-dev model")
-            logger.error("3. Token doesn't have required permissions")
-            logger.error("Please check your token and request access to the model.")
-            raise RuntimeError("Authentication failed for gated FLUX.1-dev model. Please verify your token and access permissions.")
-        else:
-            logger.error(f"✗ Download failed: {e}")
-            raise
+    # Try downloading with retry logic for large files
+    import time
+    download_success = False
+    
+    for attempt in range(3):
+        try:
+            logger.info(f"FLUX.1-dev download attempt {attempt + 1}/3...")
+            
+            # If we have local transformer weights, only ignore the weights file, not the config
+            ignore_patterns = []
+            if transformer_weights_path:
+                ignore_patterns = ["transformer/diffusion_pytorch_model.safetensors"]
+            
+            snapshot_download(
+                repo_id="black-forest-labs/FLUX.1-dev",
+                local_dir=flux_complete_dir,
+                local_dir_use_symlinks=False,
+                token=hf_token,
+                ignore_patterns=ignore_patterns,
+                resume_download=True  # Enable resume for large downloads
+            )
+            logger.info("✓ Download complete")
+            download_success = True
+            break
+            
+        except Exception as e:
+            if "authentication" in str(e).lower() or "token" in str(e).lower() or "gated" in str(e).lower():
+                logger.error("✗ Authentication failed!")
+                logger.error("This could be due to:")
+                logger.error("1. Invalid or expired token")
+                logger.error("2. No access granted to FLUX.1-dev model")
+                logger.error("3. Token doesn't have required permissions")
+                logger.error("Please check your token and request access to the model.")
+                raise RuntimeError("Authentication failed for gated FLUX.1-dev model. Please verify your token and access permissions.")
+            else:
+                logger.warning(f"Download attempt {attempt + 1} failed: {e}")
+                if attempt < 2:  # Don't sleep on the last attempt
+                    logger.info(f"Retrying in 10 seconds...")
+                    time.sleep(10)
+                else:
+                    logger.error(f"✗ All download attempts failed")
+                    raise RuntimeError(f"FLUX.1-dev download failed after 3 attempts: {e}")
+    
+    if not download_success:
+        raise RuntimeError("FLUX.1-dev download failed after all retry attempts")
     
     # If we have local transformer weights, copy/link them
     if transformer_weights_path:
@@ -699,18 +720,12 @@ class DreamLightNode:
         bg_tensor = bg_tensor.to(device)
         env_tensor = env_tensor.to(device)
         
-        # Get ComfyUI models directory
-        import folder_paths
-        models_dir = folder_paths.models_dir
-        dreamlight_dir = os.path.join(models_dir, "dreamlight")
-        flux_dir = os.path.join(dreamlight_dir, "FLUX", "DreamLight-FLUX", "transformer")
-        clip_dir = os.path.join(dreamlight_dir, "CLIP")
-        
-        
         # Get the pre-validated FLUX directory (setup during __init__)
         import folder_paths
         models_dir = folder_paths.models_dir
         flux_dir = os.path.join(models_dir, "dreamlight", "flux_complete")
+        dreamlight_dir = os.path.join(models_dir, "dreamlight")
+        clip_dir = os.path.join(dreamlight_dir, "CLIP")
         
         # Load pipeline (already validated during __init__)
         logger.info("Loading FLUX pipeline from pre-validated directory...")
