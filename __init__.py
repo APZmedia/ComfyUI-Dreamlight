@@ -214,6 +214,11 @@ def setup_complete_flux_directory():
     if not os.path.exists(text_encoder_2_model):
         missing_files.append("text_encoder_2/model.safetensors")
     
+    # Check transformer/diffusion_pytorch_model.safetensors
+    transformer_weights = os.path.join(flux_complete_dir, "transformer", "diffusion_pytorch_model.safetensors")
+    if not os.path.exists(transformer_weights):
+        missing_files.append("transformer/diffusion_pytorch_model.safetensors")
+    
     # Check transformer/config.json
     transformer_config = os.path.join(flux_complete_dir, "transformer", "config.json")
     if not os.path.exists(transformer_config):
@@ -268,15 +273,36 @@ def validate_flux_directory(flux_dir):
         "scheduler": ["scheduler_config.json"]
     }
     
+    def check_sharded_file(component_dir, base_filename):
+        """Check if a file exists either as single file or as sharded files"""
+        single_file = os.path.join(component_dir, base_filename)
+        if os.path.exists(single_file):
+            return single_file, False
+        
+        # Check for sharded files
+        import glob
+        shard_pattern = os.path.join(component_dir, f"{base_filename}.*")
+        shard_files = glob.glob(shard_pattern)
+        if shard_files:
+            # Filter out index files and get only the actual shard files
+            shard_files = [f for f in shard_files if not f.endswith('.index.json')]
+            if shard_files:
+                return shard_files[0], True  # Return first shard as representative
+        
+        return None, False
+    
     for component, required_files in components.items():
         component_dir = os.path.join(flux_dir, component)
         if os.path.exists(component_dir):
             logger.info(f"✓ {component}/ directory found")
             for req_file in required_files:
-                file_path = os.path.join(component_dir, req_file)
-                if os.path.exists(file_path):
+                file_path, is_sharded = check_sharded_file(component_dir, req_file)
+                if file_path and os.path.exists(file_path):
                     size_mb = os.path.getsize(file_path) / (1024 * 1024)
-                    logger.info(f"  ✓ {req_file} ({size_mb:.1f} MB)")
+                    if is_sharded:
+                        logger.info(f"  ✓ {req_file} (sharded, {size_mb:.1f} MB per shard)")
+                    else:
+                        logger.info(f"  ✓ {req_file} ({size_mb:.1f} MB)")
                     checks.append(True)
                 else:
                     logger.error(f"  ✗ {req_file} NOT found")
