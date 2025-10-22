@@ -265,6 +265,9 @@ class DreamLightNode:
     RETURN_TYPES = ("IMAGE",)
     RETURN_NAMES = ("relit_image",)
     FUNCTION = "process"
+    
+    # Class-level flag to track if models have been validated
+    _models_validated = False
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -281,20 +284,21 @@ class DreamLightNode:
                 "environment_map": ("IMAGE",),
             }
         }
+    
+    def __init__(self):
+        """Initialize node and validate models immediately"""
+        # Run model validation on node creation, not during processing
+        if not DreamLightNode._models_validated:
+            logger.info("DreamLight node initialized - validating models...")
+            if validate_and_download_models():
+                DreamLightNode._models_validated = True
+                logger.info("DreamLight models validated successfully")
+            else:
+                logger.error("DreamLight model validation failed")
+                raise RuntimeError("DreamLight models are not available. Please check the logs for download errors and ensure you have a stable internet connection.")
 
     def process(self, foreground_image, background_image, mask, prompt, seed, resolution, environment_map=None):
-        # Lazy import ComfyUI modules
-        import folder_paths
-        import comfy.utils
-        
-        # Run validation and download if needed (now safe in process method)
-        if not hasattr(self, '_models_validated'):
-            if validate_and_download_models():
-                self._models_validated = True
-                logger.info("DreamLight models validated for this session")
-            else:
-                logger.error("Model validation failed - cannot proceed without models")
-                raise RuntimeError("DreamLight models are not available. Please check the logs for download errors and ensure you have a stable internet connection.")
+        # Models are already validated in __init__, so we can proceed directly
         
         # Convert ComfyUI tensors to numpy arrays
         fg_np = foreground_image[0].cpu().numpy() * 255.0

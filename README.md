@@ -60,6 +60,7 @@ The node appears under "image/postprocessing" as "DreamLightNode"
    - `example_mask.png`
 
 ## Model Management
+- **Early Model Validation**: Models are checked and downloaded when the node is first created, preventing OOM errors during processing
 - **Smart Model Detection**: DreamLight automatically searches for existing FLUX.1-dev models in ComfyUI's standard directories before downloading
 - **HuggingFace Authentication**: Set `HF_TOKEN` in `.env` file for authenticated downloads
 - **Fallback Download**: If no local model is found, downloads from HuggingFace (~23GB)
