@@ -339,7 +339,29 @@ def validate_flux_directory(flux_dir):
         # Check for sharded files with various patterns
         import glob
         
-        # Try different shard patterns
+        # For transformer files, be more lenient - look for any model files
+        if "transformer" in component_dir and "diffusion_pytorch_model" in base_filename:
+            # Look for any safetensors or bin files in transformer directory
+            model_patterns = [
+                os.path.join(component_dir, "*.safetensors*"),
+                os.path.join(component_dir, "*.bin"),
+                os.path.join(component_dir, "*.pth"),
+                os.path.join(component_dir, "model.*"),
+                os.path.join(component_dir, "pytorch_model.*"),
+                os.path.join(component_dir, "diffusion_pytorch_model.*")
+            ]
+            
+            for pattern in model_patterns:
+                files = glob.glob(pattern)
+                if files:
+                    # Filter out index files and get only the actual model files
+                    model_files = [f for f in files if not f.endswith('.index.json')]
+                    if model_files:
+                        # Sort files to get the first one
+                        model_files.sort()
+                        return model_files[0], True  # Return first file as representative
+        
+        # For other components, use the original shard detection
         shard_patterns = [
             f"{base_filename}.*",  # diffusion_pytorch_model.safetensors.*
             f"{base_filename}.00001",  # diffusion_pytorch_model.safetensors.00001
