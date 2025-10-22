@@ -27,6 +27,7 @@ def load_hf_token():
         
         # Load .env file if it exists
         load_dotenv()
+        logger.info("✓ Environment file (.env) loaded successfully")
         
         # Try to get token from environment
         token = os.getenv('HF_TOKEN')
