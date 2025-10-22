@@ -222,15 +222,15 @@ class DreamLightNode:
             from PIL import Image
             import comfy.utils
         
-        # Load pipeline (already validated during __init__)
-        logger.info("Loading FLUX pipeline from pre-validated directory...")
-        pipeline = FluxPipeline.from_pretrained(
-            flux_dir,
-            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
-        )
+            # Load pipeline (already validated during __init__)
+            logger.info("Loading FLUX pipeline from pre-validated directory...")
+            pipeline = FluxPipeline.from_pretrained(
+                flux_dir,
+                torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
+            )
         
-        # Apply DreamLight modifications to transformer
-        transformer = pipeline.transformer
+            # Apply DreamLight modifications to transformer
+            transformer = pipeline.transformer
             
             # Convert inputs to PIL Images
             if isinstance(foreground_image, torch.Tensor):
@@ -278,15 +278,15 @@ class DreamLightNode:
             # Generate image
             with torch.no_grad():
                 result = pipeline(
-            prompt=prompt,
+                    prompt=prompt,
                     image=composite,
                     num_inference_steps=20,
                     guidance_scale=7.5,
                     generator=generator,
                     height=resolution,
                     width=resolution
-        ).images[0]
-        
+                ).images[0]
+            
             # Convert result back to ComfyUI format
             result_tensor = comfy.utils.pil2tensor(result)
             
@@ -309,4 +309,4 @@ NODE_DISPLAY_NAME_MAPPINGS = {
 # Package initialization
 logger.info("ComfyUI-Dreamlight package loaded successfully")
 logger.info("Registered nodes: ['DreamLightNode']")
-    logger.info("Successfully registered DreamLightNode in image/postprocessing category")
+logger.info("Successfully registered DreamLightNode in image/postprocessing category")
