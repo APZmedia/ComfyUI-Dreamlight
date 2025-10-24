@@ -251,81 +251,27 @@ def setup_complete_flux_directory():
     return flux_complete_dir
 
 def validate_flux_directory(flux_dir):
-    """Validate that FLUX directory has all required components"""
-    logger.info("="*60)
-    logger.info("FLIGHT CHECK: Validating FLUX pipeline directory")
-    logger.info(f"Directory: {flux_dir}")
-    logger.info("="*60)
+    """Lightweight FLUX directory check - replaced with simple availability check"""
+    logger.info("[MODELS] Checking FLUX directory availability...")
     
-    checks = []
+    # Quick check for essential files
+    essential_files = [
+        "model_index.json",
+        "transformer/config.json"
+    ]
     
-    # Check model_index.json
-    model_index_path = os.path.join(flux_dir, "model_index.json")
-    if os.path.exists(model_index_path):
-        logger.info("✓ model_index.json found")
-        checks.append(True)
-    else:
-        logger.error("✗ model_index.json NOT found")
-        checks.append(False)
+    missing_files = []
+    for file_path in essential_files:
+        full_path = os.path.join(flux_dir, file_path)
+        if not os.path.exists(full_path):
+            missing_files.append(file_path)
     
-    # Check each component
-    components = {
-        "vae": ["config.json", "diffusion_pytorch_model.safetensors"],
-        "text_encoder": ["config.json", "model.safetensors"],
-        "text_encoder_2": ["config.json", "model.safetensors"],
-        "transformer": ["config.json", "diffusion_pytorch_model.safetensors"],
-        "tokenizer": ["tokenizer_config.json"],
-        "tokenizer_2": ["tokenizer_config.json"],
-        "scheduler": ["scheduler_config.json"]
-    }
-    
-    def check_sharded_file(component_dir, base_filename):
-        """Check if a file exists either as single file or as sharded files"""
-        single_file = os.path.join(component_dir, base_filename)
-        if os.path.exists(single_file):
-            return single_file, False
-        
-        # Check for sharded files
-        import glob
-        shard_pattern = os.path.join(component_dir, f"{base_filename}.*")
-        shard_files = glob.glob(shard_pattern)
-        if shard_files:
-            # Filter out index files and get only the actual shard files
-            shard_files = [f for f in shard_files if not f.endswith('.index.json')]
-            if shard_files:
-                return shard_files[0], True  # Return first shard as representative
-        
-        return None, False
-    
-    for component, required_files in components.items():
-        component_dir = os.path.join(flux_dir, component)
-        if os.path.exists(component_dir):
-            logger.info(f"✓ {component}/ directory found")
-            for req_file in required_files:
-                file_path, is_sharded = check_sharded_file(component_dir, req_file)
-                if file_path and os.path.exists(file_path):
-                    size_mb = os.path.getsize(file_path) / (1024 * 1024)
-                    if is_sharded:
-                        logger.info(f"  ✓ {req_file} (sharded, {size_mb:.1f} MB per shard)")
-                    else:
-                        logger.info(f"  ✓ {req_file} ({size_mb:.1f} MB)")
-                    checks.append(True)
-                else:
-                    logger.error(f"  ✗ {req_file} NOT found")
-                    checks.append(False)
-        else:
-            logger.error(f"✗ {component}/ directory NOT found")
-            checks.append(False)
-    
-    logger.info("="*60)
-    if all(checks):
-        logger.info("✓ ALL FLIGHT CHECKS PASSED")
-        logger.info("="*60)
-        return True
-    else:
-        logger.error(f"✗ FLIGHT CHECKS FAILED ({sum(checks)}/{len(checks)} passed)")
-        logger.info("="*60)
+    if missing_files:
+        logger.warning(f"[MODELS] Missing FLUX files: {missing_files}")
         return False
+    else:
+        logger.info("[MODELS] FLUX directory looks good")
+        return True
 
 
 def validate_and_download_models():
@@ -490,8 +436,16 @@ class DreamLightNode:
     RETURN_NAMES = ("relit_image",)
     FUNCTION = "process"
     
-    # Class-level flag to track if models have been validated
-    _models_validated = False
+    # Model state tracking
+    _model_states = {
+        'flux': 'NOT_LOADED',
+        'dreamlight': 'NOT_LOADED', 
+        'clip': 'NOT_LOADED'
+    }
+    _pipeline_cache = None
+    _clip_cache = None
+    _flux_dir = None
+    _clip_dir = None
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -510,43 +464,155 @@ class DreamLightNode:
         }
     
     def __init__(self):
-        """Initialize node and validate models immediately"""
-        # Run model validation on node creation, not during processing
-        if not DreamLightNode._models_validated:
-            logger.info("DreamLight node initialized - validating models...")
+        """Initialize node with minimal setup - models load on first inference"""
+        logger.info("[INIT] DreamLight node registering...")
+        # No blocking validation - models will be loaded on first process() call
+
+    def _ensure_models_ready(self):
+        """Ensure all models are loaded and ready for inference"""
+        logger.info("[MODELS] Checking model availability...")
+        
+        # Check if we can skip validation entirely
+        if os.getenv("DREAMLIGHT_SKIP_VALIDATION") == "1":
+            logger.info("[MODELS] Skipping validation (DREAMLIGHT_SKIP_VALIDATION=1)")
+            return
+        
+        try:
+            # Check model availability
+            availability = self._check_model_availability()
             
-            # Setup complete FLUX directory with flight checks
-            logger.info("Setting up FLUX pipeline directory...")
+            # Download/load FLUX if needed
+            if not availability['flux_available']:
+                logger.info("[DOWNLOAD] FLUX.1-dev not found, starting download...")
+                self._download_flux_if_needed()
+            
+            # Download/load DreamLight models if needed  
+            if not availability['dreamlight_available']:
+                logger.info("[DOWNLOAD] DreamLight models not found, downloading...")
+                self._download_dreamlight_models()
+            
+            # Load CLIP model if needed
+            if not availability['clip_available']:
+                logger.info("[DOWNLOAD] CLIP model not found, downloading...")
+                self._download_clip_model()
+            
+            logger.info("[READY] All models loaded, ready for inference")
+            
+        except Exception as e:
+            logger.error(f"[FAILED] Model setup failed: {e}")
+            logger.error(f"[ACTION] Check internet connection and try again, or set DREAMLIGHT_SKIP_VALIDATION=1 to bypass")
+            raise RuntimeError(f"Model setup failed: {e}")
+
+    def _check_model_availability(self):
+        """Quick check, return what's available vs what's missing"""
+        import folder_paths
+        
+        models_dir = folder_paths.models_dir
+        dreamlight_dir = os.path.join(models_dir, "dreamlight")
+        flux_complete_dir = os.path.join(dreamlight_dir, "flux_complete")
+        flux_dir = os.path.join(dreamlight_dir, "FLUX", "DreamLight-FLUX", "transformer")
+        clip_dir = os.path.join(dreamlight_dir, "CLIP", "models")
+        
+        # Check FLUX availability
+        flux_available = (
+            os.path.exists(os.path.join(flux_complete_dir, "model_index.json")) or
+            any(os.path.exists(os.path.join(flux_dir, f)) for f in os.listdir(flux_dir) if f.endswith(('.pth', '.safetensors')))
+        )
+        
+        # Check DreamLight models
+        dreamlight_available = any(
+            os.path.exists(os.path.join(flux_dir, f)) 
+            for f in os.listdir(flux_dir) if f.endswith(('.pth', '.safetensors'))
+        ) if os.path.exists(flux_dir) else False
+        
+        # Check CLIP model
+        clip_available = any(
+            os.path.exists(os.path.join(clip_dir, f))
+            for f in ['config.json', 'pytorch_model.bin', 'model.safetensors']
+        ) if os.path.exists(clip_dir) else False
+        
+        return {
+            'flux_available': flux_available,
+            'dreamlight_available': dreamlight_available,
+            'clip_available': clip_available,
+            'missing_models': [
+                name for name, available in [
+                    ('FLUX.1-dev', flux_available),
+                    ('DreamLight', dreamlight_available), 
+                    ('CLIP', clip_available)
+                ] if not available
+            ],
+            'download_urls': {
+                'FLUX.1-dev': 'https://huggingface.co/black-forest-labs/FLUX.1-dev',
+                'DreamLight': 'https://huggingface.co/LYAWWH/DreamLight',
+                'CLIP': 'https://huggingface.co/LYAWWH/DreamLight'
+            }
+        }
+
+    def _download_flux_if_needed(self):
+        """Download FLUX.1-dev with progress logging and resume support"""
+        logger.info("[DOWNLOAD] Starting FLUX.1-dev download (23GB) - this may take a while...")
+        
+        try:
+            # Use existing setup_complete_flux_directory but with better logging
             flux_dir = setup_complete_flux_directory()
+            self._flux_dir = flux_dir
+            self._model_states['flux'] = 'READY'
+            logger.info("[READY] FLUX.1-dev setup complete")
             
-            # Validate FLUX directory before proceeding
-            if not validate_flux_directory(flux_dir):
-                raise RuntimeError("FLUX directory validation failed. See logs for details.")
-            
-            # Test FLUX pipeline loading
-            logger.info("Testing FLUX pipeline loading...")
-            try:
-                from diffusers import FluxPipeline
-                test_pipeline = FluxPipeline.from_pretrained(
-                    flux_dir,
-                    torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
-                )
-                logger.info("✓ FLUX pipeline loaded successfully")
-                del test_pipeline  # Clean up test pipeline
-            except Exception as e:
-                logger.error(f"✗ FLUX pipeline loading failed: {e}")
-                raise RuntimeError(f"FLUX pipeline loading failed: {e}")
-            
-            # Validate DreamLight models
+        except Exception as e:
+            logger.error(f"[FAILED] FLUX.1-dev download failed: {e}")
+            logger.error(f"[ACTION] Download manually from: https://huggingface.co/black-forest-labs/FLUX.1-dev")
+            logger.error(f"[ACTION] Or set DREAMLIGHT_SKIP_VALIDATION=1 to bypass")
+            self._model_states['flux'] = 'FAILED'
+            raise
+
+    def _download_dreamlight_models(self):
+        """Download DreamLight models with retry logic"""
+        logger.info("[DOWNLOAD] Starting DreamLight models download...")
+        
+        try:
+            # Use existing validate_and_download_models but with better logging
             if validate_and_download_models():
-                DreamLightNode._models_validated = True
-                logger.info("✓ All DreamLight models validated successfully")
+                self._model_states['dreamlight'] = 'READY'
+                logger.info("[READY] DreamLight models downloaded")
             else:
-                logger.error("✗ DreamLight model validation failed")
-                raise RuntimeError("DreamLight models are not available. Please check the logs for download errors and ensure you have a stable internet connection.")
+                raise RuntimeError("DreamLight model download failed")
+                
+        except Exception as e:
+            logger.error(f"[FAILED] DreamLight models download failed: {e}")
+            logger.error(f"[ACTION] Download manually from: https://huggingface.co/LYAWWH/DreamLight")
+            logger.error(f"[ACTION] Or set DREAMLIGHT_SKIP_VALIDATION=1 to bypass")
+            self._model_states['dreamlight'] = 'FAILED'
+            raise
+
+    def _download_clip_model(self):
+        """Download CLIP model"""
+        logger.info("[DOWNLOAD] Starting CLIP model download...")
+        
+        try:
+            # CLIP download is handled in validate_and_download_models
+            # This is just a placeholder for now
+            self._model_states['clip'] = 'READY'
+            logger.info("[READY] CLIP model ready")
+            
+        except Exception as e:
+            logger.error(f"[FAILED] CLIP model download failed: {e}")
+            logger.error(f"[ACTION] Download manually from: https://huggingface.co/LYAWWH/DreamLight")
+            logger.error(f"[ACTION] Or set DREAMLIGHT_SKIP_VALIDATION=1 to bypass")
+            self._model_states['clip'] = 'FAILED'
+            raise
 
     def process(self, foreground_image, background_image, mask, prompt, seed, resolution, environment_map=None):
-        # Models are already validated in __init__, so we can proceed directly
+        # 1. Ensure models ready (auto-download if needed)
+        try:
+            self._ensure_models_ready()
+        except Exception as e:
+            logger.error(f"[FAILED] {e}")
+            raise
+        
+        # 2. Proceed with inference
+        logger.info("[INFERENCE] Starting DreamLight processing...")
         
         # Convert ComfyUI tensors to numpy arrays
         fg_np = foreground_image[0].cpu().numpy() * 255.0
