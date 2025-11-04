@@ -16,8 +16,12 @@ NODE_CLASS_MAPPINGS = {
     "DreamLightNode": None  # Will be set after class definition
 }
 
-# Set up logging
-logger = logging.getLogger(__name__)
+# Set up logging and add a simple prefix so all messages are easy to find
+class _PrefixedAdapter(logging.LoggerAdapter):
+    def process(self, msg, kwargs):
+        return f"[Dreamlight] {msg}", kwargs
+
+logger = _PrefixedAdapter(logging.getLogger(__name__), {})
 
 def load_hf_token():
     """Load HuggingFace token from .env file or environment variables"""
@@ -664,20 +668,14 @@ class DreamLightNode:
         fg_tensor = fg_tensor.to(device)
         bg_tensor = bg_tensor.to(device)
         env_tensor = env_tensor.to(device)
-        
-        # Get ComfyUI models directory
+
+        # Get ComfyUI models directory (lazy import to avoid hard dependency at module import)
         import folder_paths
         models_dir = folder_paths.models_dir
         dreamlight_dir = os.path.join(models_dir, "dreamlight")
-        flux_dir = os.path.join(dreamlight_dir, "FLUX", "DreamLight-FLUX", "transformer")
         clip_dir = os.path.join(dreamlight_dir, "CLIP")
-        
-        
-        # Get the pre-validated FLUX directory (setup during __init__)
-        import folder_paths
-        models_dir = folder_paths.models_dir
         flux_dir = os.path.join(models_dir, "dreamlight", "flux_complete")
-        
+
         # Load pipeline (already validated during __init__)
         logger.info("Loading FLUX pipeline from pre-validated directory...")
         pipeline = FluxPipeline.from_pretrained(
@@ -687,15 +685,28 @@ class DreamLightNode:
         
         # Apply DreamLight modifications to transformer
         transformer = pipeline.transformer
+        # Add extra channels (1 for mask + optionally 1 for environment map)
         extra_channels = 1 + (1 if environment_map is not None else 0)
         x_embedder = transformer.x_embedder
-        new_x_embedder = torch.nn.Linear(
-            x_embedder.in_features * (1 + 1 + extra_channels),
-            x_embedder.out_features
-        )
-        new_x_embedder.weight.data.zero_()
-        new_x_embedder.weight.data[:, :x_embedder.in_features].copy_(x_embedder.weight.data)
-        new_x_embedder.bias.data.copy_(x_embedder.bias.data)
+
+        # Create a new linear layer with increased input features to accept extra channels.
+        # Use a conservative, clear expansion: new_in = original_in + extra_channels
+        new_in = x_embedder.in_features + extra_channels
+        new_x_embedder = torch.nn.Linear(new_in, x_embedder.out_features)
+
+        # Initialize new weights safely and copy the original weights into the left-side slice
+        with torch.no_grad():
+            orig_w = x_embedder.weight.data
+            orig_b = x_embedder.bias.data if x_embedder.bias is not None else None
+
+            # Zero new weights, then copy existing weights into the matching slice
+            new_x_embedder.weight.data.zero_()
+            if new_x_embedder.weight.data.shape[1] < orig_w.shape[1]:
+                raise RuntimeError(f"[Dreamlight] New x_embedder in_features {new_x_embedder.weight.data.shape[1]} < original {orig_w.shape[1]}")
+            new_x_embedder.weight.data[:, :orig_w.shape[1]].copy_(orig_w)
+            if orig_b is not None:
+                new_x_embedder.bias.data.copy_(orig_b)
+
         transformer.x_embedder = new_x_embedder
         pipeline.to(device)
         
@@ -723,9 +734,13 @@ class DreamLightNode:
             generator=generator
         ).images[0]
         
-        # Convert output to ComfyUI tensor format
+        # Convert output to ComfyUI tensor format (batch, C, H, W) and normalize to [-1, 1]
         output_np = np.array(output).astype(np.float32) / 255.0
-        output_tensor = torch.from_numpy(output_np).unsqueeze(0)
+        # Convert HWC -> CHW
+        output_np = np.transpose(output_np, (2, 0, 1))
+        # Convert to same normalization as inputs (inputs used: /127.5 - 1.0), so map [0,1] -> [-1,1]
+        output_np = output_np * 2.0 - 1.0
+        output_tensor = torch.from_numpy(output_np).unsqueeze(0).float()
         return (output_tensor,)
         
 NODE_CLASS_MAPPINGS["DreamLightNode"] = DreamLightNode

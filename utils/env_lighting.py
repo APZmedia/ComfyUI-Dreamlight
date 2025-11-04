@@ -1,6 +1,14 @@
 import torch
 import numpy as np
 from PIL import Image
+import logging
+
+# LoggerAdapter ensures all messages from these helpers are prefixed for easy filtering
+class _PrefixedAdapter(logging.LoggerAdapter):
+    def process(self, msg, kwargs):
+        return f"[Dreamlight] {msg}", kwargs
+
+logger = _PrefixedAdapter(logging.getLogger(__name__), {})
 
 def calculate_spherical_harmonics(env_map, order=2):
     """
@@ -13,6 +21,7 @@ def calculate_spherical_harmonics(env_map, order=2):
     Returns:
         coeffs: Spherical harmonics coefficients
     """
+    logger.debug("calculate_spherical_harmonics called")
     if isinstance(env_map, Image.Image):
         ldr_image = np.array(env_map).astype(np.float32) / 255.0
     else:
@@ -60,6 +69,7 @@ def generate_spherical_image(coeffs, height, width):
     Returns:
         spherical_image: Generated spherical image as a numpy array
     """
+    logger.debug("generate_spherical_image called")
     # Generate a grid of spherical coordinates
     y, x = np.mgrid[0:height, 0:width]
     phi = 2 * np.pi * x / width
